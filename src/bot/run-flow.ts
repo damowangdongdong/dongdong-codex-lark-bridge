@@ -46,6 +46,7 @@ export interface StartRunFlowInput {
 export type RunFlowRejectCode =
   | WorkingDirectoryRejectReason
   | RunPolicyReject['rejectReason']['code']
+  | 'codex-launch-required'
   | RunRejectedCode;
 
 export type StartRunFlowResult =
@@ -75,6 +76,18 @@ export interface RecordRunSessionEventInput {
 }
 
 export async function startRunFlow(input: StartRunFlowInput): Promise<StartRunFlowResult> {
+  if (
+    input.capability.agentId === 'codex'
+    && input.workspaces.codexLaunchPendingFor(input.scopeId)
+  ) {
+    return {
+      ok: false,
+      rejectReason: {
+        code: 'codex-launch-required',
+        userVisible: '请先在工作目录卡片中选择 Codex profile，并选择新建或恢复会话。',
+      },
+    };
+  }
   const requestedCwd =
     input.workspaces.cwdFor(input.scopeId) ?? input.profileConfig.workspaces.default ?? '';
   const workspace = await resolveWorkingDirectory(requestedCwd);
@@ -101,6 +114,14 @@ export async function startRunFlow(input: StartRunFlowInput): Promise<StartRunFl
     now: input.now,
     codexHome: input.profileConfig.codex?.codexHome,
     inheritCodexHome: input.profileConfig.codex?.inheritCodexHome,
+    codexProfile: input.workspaces.codexProfileFor(
+      input.scopeId,
+      input.profileConfig.codex?.profile,
+    ),
+    codexSandbox:
+      input.capability.agentId === 'codex'
+        ? input.workspaces.codexSandboxFor(input.scopeId)
+        : undefined,
   });
   if (!policy.ok) {
     return {
@@ -144,10 +165,24 @@ export async function startRunFlow(input: StartRunFlowInput): Promise<StartRunFl
       policy,
       sessionId,
       threadId,
-      model: resolveModelArg(
-        input.profileConfig.agentKind,
-        input.profileConfig.preferences.model,
-      ),
+      model:
+        input.capability.agentId === 'codex'
+          ? input.workspaces.codexModelFor(
+              input.scopeId,
+              resolveModelArg('codex', input.profileConfig.preferences.model),
+            )
+          : resolveModelArg('claude', input.profileConfig.preferences.model),
+      personality:
+        input.capability.agentId === 'codex'
+          ? input.workspaces.codexPersonalityFor(input.scopeId)
+          : undefined,
+      profile:
+        input.capability.agentId === 'codex'
+          ? input.workspaces.codexProfileFor(
+              input.scopeId,
+              input.profileConfig.codex?.profile,
+            )
+          : undefined,
       images:
         input.capability.agentId === 'codex'
           ? policy.attachments

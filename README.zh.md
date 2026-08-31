@@ -137,13 +137,15 @@ lark-channel-bridge profile export <name> --include-secrets --yes
 
 | 命令 | 作用 |
 |---|---|
-| `/new`, `/reset` | 清空当前会话 |
-| `/cd <path>` | 切换工作目录并重置会话 |
+| `/new`, `/clear`, `/reset` | 清空当前会话 |
+| `/cd <path>` | 切换工作目录；Codex 随后选择 CLI profile 和新建/恢复方式 |
 | `/ws list` | 列出命名工作空间 |
 | `/ws save <name>` | 把当前工作目录保存为命名工作空间 |
-| `/ws use <name>` | 切换到命名工作空间 |
+| `/ws use <name>` | 切换到命名工作空间；Codex 随后弹出同样的启动选择卡 |
 | `/ws remove <name>` | 删除命名工作空间 |
 | `/resume` | 恢复同 agent、工作目录、权限模式兼容的历史会话 |
+| `/permissions [read-only\|workspace-write\|danger-full-access]` | 查看或持久化当前聊天/话题的 Codex 权限（也支持 `/permission`） |
+| `/attach` | 输出把本机 Codex TUI 附着到当前 thread 的准确命令 |
 | `/status` | 查看 profile、agent、工作目录、会话、lark-cli 身份和运行状态 |
 | `/config` | 调整展示偏好、访问控制和 lark-cli 身份策略 |
 | `/invite user @某人` | 允许用户私聊使用 bot |
@@ -151,15 +153,34 @@ lark-channel-bridge profile export <name> --include-secrets --yes
 | `/invite group` | 允许当前群使用 bot |
 | `/invite all group` | 允许 bot 所在的所有群使用 |
 | `/remove user @某人`, `/remove admin @某人`, `/remove group` | 移除访问控制条目 |
-| `/stop` | 停止当前 run，也可点卡片停止按钮 |
+| `/stop` | Codex 下优先中断活动 turn；没有活动 turn 时停止后台终端 |
+| `/stop terminals`, `/clean` | 停止当前 Codex thread 的全部后台终端 |
 | `/timeout [N\|off\|default]` | 设置或清除当前会话的 idle watchdog |
-| `/ps` | 列出本机 bridge 进程 |
+| `/ps` | Codex 下列出当前 thread 的后台终端 |
+| `/ps bridge` | 列出本机 bridge 进程 |
+| `/delete`, `/delete confirm` | 先预览，再永久删除当前 Codex thread 及其子会话 |
+| `/codex commands` | 显示 Codex 0.151 全部斜杠命令及各自的执行位置 |
 | `/exit <id\|#>` | 停止指定 bridge 进程 |
 | `/reconnect` | 强制 WebSocket 重连 |
 | `/doctor [描述]` | 执行低敏诊断 |
 | `/help` | 帮助卡片 |
 
 私聊不需要 @。群和话题群默认必须 `@bot`；`@all` 会被忽略。支持的云文档评论里 @bot 就会触发回复。
+
+### Codex CLI 工作流
+
+Codex 按所选 Codex CLI profile 各自复用一个常驻 `codex app-server`。执行 `/cd` 或 `/ws use` 后，bridge 不会自动启动会话：启动卡会让你选择默认 Codex 配置（不传 `--profile`）或发现的命名 profile（例如 `freerouter`），并选择新建或恢复 thread。`/resume` 会显示易读的候选项，选中后再分页展示该 thread 的历史记录。
+
+Codex turn 运行时，点击 **↵ 立即插入** 会 steer 当前 turn（对应 Enter），点击 **⇥ 排队** 会在当前 turn 完成后执行（对应 Tab）。`/attach` 会输出 `codex --remote <endpoint> resume <thread-id>`；在附着终端中输入的内容、运行过程和最终答案会同步回飞书。飞书发起的 turn 也复用同一个 app-server 和 thread。
+
+bridge 覆盖 Codex CLI 0.151 的全部斜杠命令；发送 `/codex commands` 可以在飞书中查看完整清单。执行方式分为：
+
+- 飞书原生：`/permissions`、`/permission`、`/clear`、`/resume`、`/new`、`/status`。
+- app-server：`/apps`、`/plugins`、`/hooks`、`/rename`、`/archive`、`/delete`、`/compact`、`/experimental`、`/memories`、`/skills`、`/mcp`、`/model`、`/fast`、`/plan`、`/goal`、`/personality`、`/clean`、`/fork`、`/review`、`/usage`、`/debug-config`。
+- bridge 双重控制：`/ps`、`/stop`、`/exit`。在 Codex bot 中，`/ps` 表示后台终端，`/ps bridge` 才表示本机 bridge 进程；`/stop` 优先中断活动 turn，`/stop terminals` 和 `/clean` 停止 thread 的后台终端；永久删除必须显式发送 `/delete confirm`。
+- 附着 TUI：`/ide`、`/keymap`、`/vim`、`/setup-default-sandbox`、`/sandbox-add-read-dir`、`/agent`、`/subagents`、`/copy`、`/diff`、`/approve`、`/import`、`/feedback`、`/init`、`/logout`、`/mention`、`/app`、`/side`、`/btw`、`/raw`、`/quit`、`/statusline`、`/title`、`/theme`、`/pets`、`/pet`。这些命令依赖终端本地 UI 状态，因此 bridge 会返回准确的 `/attach` 指引。
+
+未知斜杠命令会作为命令被拦截，不会误发给模型当作 prompt。
 
 ## 回复展示与 COT
 
@@ -170,6 +191,8 @@ lark-channel-bridge profile export <name> --include-secrets --yes
 - **COT 过程消息**：`关闭` 只发送最终回复；`简略` 先用 COT 消息展示 agent 的过程文本和工具摘要；`详细` 还会展示工具参数和截断后的输出。
 
 开启 COT 后，bridge 会把过程消息和最终答案拆成两条消息。过程消息用于追踪 agent 做了什么；最终答案仍由 agent 原始文本生成，bridge 不做启发式过滤。若 agent 把最终答案也作为普通流式文本输出，COT 过程消息中可能会出现对应片段。
+
+Codex 完成后还会在独立最终答案之前发送分页的完整轨迹卡。推理、过程说明、附着终端输入、工具参数、工具输出和 token 用量会分开展示；长内容会拆分到多张卡片而不是截断。附着终端发起的 turn 也采用相同展示。
 
 ## lark-cli 身份策略
 
@@ -217,6 +240,8 @@ bridge 会检查所选目录存在、是目录，并且不是 `/`、Home 根、�
 | `read-only` | `plan` | `read-only` |
 
 旧版 `sandbox` 字段仍可读取。bridge 保存 profile 后，会把该设置迁移为 canonical `permissions`。
+
+Codex 的 `/permissions` 会按聊天/话题持久化实际权限，并受配置的权限上限约束；`/status` 会同时显示所选 Codex profile 和当前实际权限。
 
 ## 数据目录
 

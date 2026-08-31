@@ -5,10 +5,12 @@ export type { ClaudePermissionMode } from '../config/permissions';
 
 export type AgentEvent =
   | { type: 'system'; sessionId?: string; threadId?: string; cwd?: string; model?: string }
+  | { type: 'user_text'; content: string }
   | { type: 'text'; delta: string }
   | { type: 'final_text'; content: string }
   | { type: 'thinking'; delta: string }
   | { type: 'tool_use'; id: string; name: string; input: unknown }
+  | { type: 'tool_progress'; id: string; delta: string }
   | { type: 'tool_result'; id: string; output: string; isError: boolean }
   | {
       type: 'usage';
@@ -35,6 +37,9 @@ export interface AgentRunOptions {
   sessionId?: string;
   threadId?: string;
   model?: string;
+  personality?: 'friendly' | 'pragmatic' | 'none';
+  /** Optional named Codex CLI config profile (`codex --profile <name>`). */
+  profile?: string;
   images?: readonly string[];
   sandbox?: CodexSandboxMode;
   permissionMode?: ClaudePermissionMode;
@@ -51,6 +56,10 @@ export interface AgentRunOptions {
 export interface AgentRun {
   readonly runId: string;
   readonly events: AsyncIterable<AgentEvent>;
+  /** Append instructions to the currently running turn (Codex Enter semantics). */
+  steer?(prompt: string, images?: readonly string[]): Promise<void>;
+  /** Local app-server endpoint and loaded thread for attaching a Codex TUI. */
+  remoteSession?(): { endpoint: string; threadId?: string; profile?: string };
   stop(): Promise<void>;
   /**
    * Wait up to `timeoutMs` for the agent process to exit on its own.
@@ -89,4 +98,29 @@ export interface AgentAdapter {
    * Adapters that don't bake identity into their prompts may omit it.
    */
   setBotIdentity?(identity: AgentBotIdentity): void;
+  /** Release persistent transport processes owned by this adapter. */
+  close?(): Promise<void>;
+  /** Low-level Codex app-server access for bridge slash commands. */
+  appServerRequest?(profile: string | undefined, method: string, params?: unknown): Promise<unknown>;
+  appServerEndpoint?(profile?: string): Promise<string>;
+  bindRemoteThread?(binding: AgentRemoteThreadBinding): void;
+  onExternalRun?(listener: (run: AgentExternalRun) => void): () => void;
+}
+
+export interface AgentRemoteThreadBinding {
+  scopeId: string;
+  chatId: string;
+  threadId: string;
+  messageThreadId?: string;
+  replyTo?: string;
+  operatorOpenId: string;
+  profile?: string;
+  cwd: string;
+  sandbox: CodexSandboxMode;
+  policyFingerprint?: string;
+}
+
+export interface AgentExternalRun {
+  binding: AgentRemoteThreadBinding;
+  run: AgentRun;
 }

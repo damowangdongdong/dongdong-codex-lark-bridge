@@ -85,6 +85,26 @@ describe('run policy', () => {
     expect(result.permissionMode).toBe('plan');
   });
 
+  it('uses a per-scope Codex sandbox selection and clamps it to the configured max', () => {
+    const config = profile({
+      agentKind: 'codex',
+      permissions: { defaultAccess: 'read-only', maxAccess: 'workspace' },
+    });
+    const selected = evaluateRunPolicy({
+      ...baseInput({ profileConfig: config }),
+      capability: codexCapability(config),
+      codexSandbox: 'workspace-write',
+    });
+    const clamped = evaluateRunPolicy({
+      ...baseInput({ profileConfig: config }),
+      capability: codexCapability(config),
+      codexSandbox: 'danger-full-access',
+    });
+
+    expect(selected).toMatchObject({ ok: true, sandbox: 'workspace-write', accessMode: 'workspace' });
+    expect(clamped).toMatchObject({ ok: true, sandbox: 'workspace-write', accessMode: 'workspace' });
+  });
+
   it('returns an expiry and a stable policy fingerprint for accepted runs', () => {
     const input = baseInput({ now: 1000 });
     const result = evaluateRunPolicy(input);

@@ -79,6 +79,36 @@ describe('signed card callback dispatch', () => {
     expect(h.pending.cancel('oc_group')).toHaveLength(0);
   });
 
+  it('maps Codex run-card Enter to steer and Tab to the pending queue', async () => {
+    const h = await createHarness({ agentKind: 'codex' });
+    const activeRun = h.agent.run({ runId: 'run-active', prompt: 'running' }) as FakeAgentRun;
+    h.activeRuns.register('oc_group', activeRun);
+
+    await h.dispatch(
+      {
+        cmd: 'codex.inject',
+        __bridge_cb: true,
+        bridge_token: h.token('codex.inject', { nonce: 'nonce-inject' }),
+      },
+      { codex_input: 'insert immediately' },
+    );
+
+    expect(activeRun.steered).toEqual([{ prompt: 'insert immediately', images: [] }]);
+    expect(h.pending.cancel('oc_group')).toHaveLength(0);
+
+    await h.dispatch(
+      {
+        cmd: 'codex.queue',
+        __bridge_cb: true,
+        bridge_token: h.token('codex.queue', { nonce: 'nonce-queue' }),
+      },
+      { codex_input: 'run next' },
+    );
+
+    expect(activeRun.steered).toHaveLength(1);
+    expect(h.pending.cancel('oc_group')).toMatchObject([{ content: 'run next' }]);
+  });
+
   it('scopes topic-group callbacks by the carrier message thread_id', async () => {
     const h = await createHarness({ chatMode: 'topic' });
     // The dispatcher must read items[0].thread_id from the raw message get to
@@ -133,22 +163,28 @@ type Harness = {
 };
 
 async function createHarness(
-  opts: { callbackAuth?: boolean; chatMode?: 'p2p' | 'group' | 'topic' } = {},
+  opts: {
+    callbackAuth?: boolean;
+    chatMode?: 'p2p' | 'group' | 'topic';
+    agentKind?: 'claude' | 'codex';
+  } = {},
 ): Promise<Harness> {
   const tmp = await createTmpProfile('callback-dispatch-test-');
   const channel = createFakeChannel();
   const sessions = new SessionStore(`${tmp.profile}/sessions.json`);
   const workspaces = new WorkspaceStore(`${tmp.profile}/workspaces.json`);
   const activeRuns = new ActiveRuns();
-  const agent = new FakeAgentAdapter();
+  const agentKind = opts.agentKind ?? 'claude';
+  const agent = new FakeAgentAdapter({ id: agentKind });
   const pending = new PendingQueue(60_000, () => {});
   const store = new CallbackNonceStore(`${tmp.profile}/callback-nonces.json`);
   const controls = {
-    profile: 'claude',
+    profile: agentKind,
     profileConfig: createDefaultProfileConfig({
-      agentKind: 'claude',
+      agentKind,
       accounts: { app: { id: 'app-id', secret: 'secret', tenant: 'feishu' } },
       access: { allowedChats: ['oc_group'] },
+      ...(agentKind === 'codex' ? { codex: { binaryPath: 'codex' } } : {}),
     }),
     botOwnerId: 'ou_owner',
     ownerRefreshState: 'ok',
@@ -157,9 +193,10 @@ async function createHarness(
     async exit() {},
     configPath: `${tmp.profile}/config.json`,
     cfg: createDefaultProfileConfig({
-      agentKind: 'claude',
+      agentKind,
       accounts: { app: { id: 'app-id', secret: 'secret', tenant: 'feishu' } },
       access: { allowedChats: ['oc_group'] },
+      ...(agentKind === 'codex' ? { codex: { binaryPath: 'codex' } } : {}),
     }),
     processId: 'proc-1',
   } satisfies Controls;

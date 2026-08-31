@@ -137,13 +137,15 @@ If a profile was created with the wrong agent kind, stop or unregister any match
 
 | Command | Effect |
 |---|---|
-| `/new`, `/reset` | Clear the current session |
-| `/cd <path>` | Switch working directory and reset the session |
+| `/new`, `/clear`, `/reset` | Clear the current session |
+| `/cd <path>` | Switch working directory; Codex then asks for a CLI profile and new/resume mode |
 | `/ws list` | List named workspaces |
 | `/ws save <name>` | Save the current working directory as a named workspace |
-| `/ws use <name>` | Switch to a named workspace |
+| `/ws use <name>` | Switch to a named workspace; Codex then opens the same launch picker |
 | `/ws remove <name>` | Delete a named workspace |
 | `/resume` | Resume compatible history for the same agent, working directory, and permission mode |
+| `/permissions [read-only\|workspace-write\|danger-full-access]` | Show or persist the Codex permission for this chat/topic (`/permission` also works) |
+| `/attach` | Print the exact command for attaching a local Codex TUI to this thread |
 | `/status` | Show profile, agent, working directory, session, lark-cli identity, and run state |
 | `/config` | Adjust presentation preferences, access settings, and lark-cli identity policy |
 | `/invite user @name` | Allow a user to use the bot in DMs |
@@ -151,15 +153,34 @@ If a profile was created with the wrong agent kind, stop or unregister any match
 | `/invite group` | Allow the current group to use the bot |
 | `/invite all group` | Allow all groups the bot has joined |
 | `/remove user @name`, `/remove admin @name`, `/remove group` | Remove access entries |
-| `/stop` | Stop the current run, including the card stop button |
+| `/stop` | With Codex, interrupt the active turn; if none is active, stop background terminals |
+| `/stop terminals`, `/clean` | Stop all background terminals for the current Codex thread |
 | `/timeout [N\|off\|default]` | Set or clear the current session idle watchdog |
-| `/ps` | List local bridge processes |
+| `/ps` | With Codex, list background terminals for the current thread |
+| `/ps bridge` | List local bridge processes |
+| `/delete`, `/delete confirm` | Preview, then permanently delete the current Codex thread and its child threads |
+| `/codex commands` | Show the complete Codex 0.151 slash-command inventory and where each command runs |
 | `/exit <id\|#>` | Stop a bridge process |
 | `/reconnect` | Force a WebSocket reconnect |
 | `/doctor [description]` | Run low-sensitive diagnostics |
 | `/help` | Help card |
 
 DMs do not require an @ mention. Groups and topic groups require `@bot` by default; `@all` is ignored. Cloud-doc comments in supported document types run when the bot is mentioned.
+
+### Codex CLI workflow
+
+Codex uses one persistent `codex app-server` per selected Codex CLI profile. After `/cd` or `/ws use`, the bridge does not start a session automatically: the launch card asks whether to use the default Codex configuration (no `--profile`) or a discovered named profile such as `freerouter`, and whether to create or resume a thread. `/resume` shows readable candidates and, after selection, paginated history from that thread.
+
+While a Codex turn is running, use **↵ Insert now** to steer the active turn (Enter semantics), or **⇥ Queue** to run the instruction after it completes (Tab semantics). `/attach` prints `codex --remote <endpoint> resume <thread-id>`; input entered in that attached terminal and its resulting progress/final answer are mirrored back to Feishu. Feishu-originated turns use the same app-server and thread.
+
+The bridge covers the complete Codex CLI 0.151 slash-command inventory. `/codex commands` prints this inventory in Feishu. The execution surfaces are:
+
+- Bridge-native: `/permissions`, `/permission`, `/clear`, `/resume`, `/new`, `/status`.
+- App-server: `/apps`, `/plugins`, `/hooks`, `/rename`, `/archive`, `/delete`, `/compact`, `/experimental`, `/memories`, `/skills`, `/mcp`, `/model`, `/fast`, `/plan`, `/goal`, `/personality`, `/clean`, `/fork`, `/review`, `/usage`, `/debug-config`.
+- Hybrid bridge controls: `/ps`, `/stop`, `/exit`. In a Codex bot, `/ps` means Codex background terminals and `/ps bridge` means local bridge processes; `/stop` interrupts an active turn, while `/stop terminals` and `/clean` stop the thread's background terminals. `/delete` requires the explicit `/delete confirm` form before permanent deletion.
+- Attached-TUI commands: `/ide`, `/keymap`, `/vim`, `/setup-default-sandbox`, `/sandbox-add-read-dir`, `/agent`, `/subagents`, `/copy`, `/diff`, `/approve`, `/import`, `/feedback`, `/init`, `/logout`, `/mention`, `/app`, `/side`, `/btw`, `/raw`, `/quit`, `/statusline`, `/title`, `/theme`, `/pets`, `/pet`. The bridge responds with the exact `/attach` instruction because these commands depend on terminal-local UI state.
+
+Unknown slash commands are consumed as commands and are never sent to the model as prompts.
 
 ## Reply Display and COT
 
@@ -170,6 +191,8 @@ DMs do not require an @ mention. Groups and topic groups require `@bot` by defau
 - **COT process message**: `off` sends only the final reply; `brief` first sends a COT message with agent progress text and tool summaries; `detailed` also includes tool args and truncated output.
 
 When COT is enabled, the bridge splits the process view and final answer into two messages. The COT message is for tracing what the agent did; the final answer is still generated from the agent's raw text, without heuristic bridge-side filtering. If an agent emits final-answer text as ordinary stream text, that text can also appear in the COT process message.
+
+Codex completions additionally emit paginated full-trace cards before the separate final answer. Reasoning, commentary, attached-terminal input, tool arguments, tool output, and token usage remain distinct; long sections are split across cards instead of being truncated. This also applies to turns started from an attached terminal.
 
 ## lark-cli identity policy
 
@@ -217,6 +240,8 @@ Mode mapping:
 | `read-only` | `plan` | `read-only` |
 
 The legacy `sandbox` field is still readable for old configs. After the bridge saves the profile, it migrates that setting to canonical `permissions`.
+
+For Codex, `/permissions` stores the effective mode per chat/topic and clamps it to the configured maximum. `/status` shows both the selected Codex profile and the effective permission mode.
 
 ## Data directories
 

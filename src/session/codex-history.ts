@@ -35,6 +35,7 @@ export interface ListCodexThreadHistoryOptions {
   profileStateDir: string;
   codexHome?: string;
   inheritCodexHome?: boolean;
+  profile?: string;
   timeoutMs?: number;
   sourceKinds?: readonly CodexThreadSourceKind[];
   useStateDbOnly?: boolean;
@@ -178,7 +179,12 @@ function spawnCodexAppServer(options: ListCodexThreadHistoryOptions): CodexAppSe
     envOverrides.CODEX_HOME = join(options.profileStateDir, 'codex-home');
   }
 
-  return spawnProcess(options.binary, ['app-server', '--listen', 'stdio://'], {
+  return spawnProcess(options.binary, [
+    ...(options.profile ? ['--profile', options.profile] : []),
+    'app-server',
+    '--listen',
+    'stdio://',
+  ], {
     env: mergeProcessEnv(process.env, envOverrides),
     stdio: ['pipe', 'pipe', 'pipe'],
   }) as CodexAppServerChild;

@@ -1,3 +1,4 @@
+import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { CardActionEvent, NormalizedMessage } from '@larksuite/channel';
@@ -16,7 +17,7 @@ import { SessionStore } from '../../../src/session/store.js';
 import { WorkspaceStore } from '../../../src/workspace/store.js';
 import type { CodexThreadHistoryEntry } from '../../../src/session/codex-history.js';
 import type { SessionSummary } from '../../../src/session/history.js';
-import { createFakeAgent } from '../../helpers/fake-agent.js';
+import { FakeAgentAdapter } from '../../helpers/fake-agent.js';
 import { createFakeChannel, type FakeChannel } from '../../helpers/fake-channel.js';
 import { createTmpProfile, type TmpProfile } from '../../helpers/tmp-profile.js';
 
@@ -27,6 +28,7 @@ interface Harness {
   workspaces: WorkspaceStore;
   catalog: SessionCatalog;
   controls: Controls;
+  agent: FakeAgentAdapter;
   identity: SessionCatalogIdentity;
   claudeHistory: SessionSummary[];
   codexHistory: CodexThreadHistoryEntry[];
@@ -34,6 +36,7 @@ interface Harness {
   pending: PendingQueue;
   run(content: string, options?: { withCatalogIdentity?: boolean; chatMode?: 'p2p' | 'group' | 'topic' }): Promise<boolean>;
   dispatchResumeArg(arg: string): Promise<void>;
+  dispatchLaunch(profile: string, mode: 'new' | 'resume'): Promise<void>;
 }
 
 const cleanups: Array<() => Promise<void>> = [];
@@ -185,6 +188,19 @@ describe('agent-aware resume commands', () => {
 
   it('lists Codex history for the current cwd and resumes the selected thread through a nonce', async () => {
     const h = await createHarness('codex');
+    h.agent.setAppServerResponse('thread/read', {
+      thread: {
+        id: 'thread-beta-secret',
+        name: 'beta session',
+        turns: [{
+          status: 'completed',
+          items: [
+            { type: 'userMessage', content: [{ type: 'input_text', text: 'historic question' }] },
+            { type: 'agentMessage', phase: 'final_answer', text: 'historic answer' },
+          ],
+        }],
+      },
+    });
     h.codexHistory.push(
       codexThread('thread-alpha-secret', 'alpha prompt', 1_700_000_100_000),
       codexThread('thread-beta-secret', 'beta prompt', 1_700_000_000_000),
@@ -207,7 +223,14 @@ describe('agent-aware resume commands', () => {
       threadId: 'thread-beta-secret',
     });
     expect(h.sessions.getRaw('chat-1')).toBeUndefined();
-    expect(lastMarkdown(h.channel)).toContain('已完成');
+    expect(h.agent.appServerRequests.at(-1)).toMatchObject({
+      method: 'thread/read',
+      params: { threadId: 'thread-beta-secret', includeTurns: true },
+    });
+    const historyCard = lastContentString(h.channel);
+    expect(historyCard).toContain('Codex 历史');
+    expect(historyCard).toContain('historic question');
+    expect(historyCard).toContain('historic answer');
   });
 
   it('resumes a Codex history selection from the card button callback', async () => {
@@ -224,6 +247,20 @@ describe('agent-aware resume commands', () => {
       threadId: 'thread-alpha-secret',
     });
     expect(lastMarkdown(h.channel)).toContain('已完成');
+  });
+
+  it('keeps a Codex resume selected when reading its display history fails', async () => {
+    const h = await createHarness('codex');
+    h.codexHistory.push(codexThread('thread-offline', 'offline history', 1_700_000_100_000));
+    await expect(h.run('/resume')).resolves.toBe(true);
+    const [nonce] = resumeArgsFromCard(lastContent(h.channel));
+    vi.spyOn(h.agent, 'appServerRequest').mockRejectedValueOnce(new Error('app-server offline'));
+
+    await expect(h.run(`/resume use ${nonce}`)).resolves.toBe(true);
+
+    expect(h.catalog.activeFor(h.identity)).toMatchObject({ threadId: 'thread-offline' });
+    expect(lastMarkdown(h.channel)).toContain('会话已恢复');
+    expect(lastMarkdown(h.channel)).toContain('读取历史记录失败');
   });
 
   it('keeps Codex resume history details out of group chats like Claude', async () => {
@@ -264,6 +301,228 @@ describe('agent-aware resume commands', () => {
 
     expect(lastMarkdown(h.channel)).toContain('请先使用 /cd');
   });
+
+  it('asks for a Codex profile and launch mode after /cd without starting a run', async () => {
+    const h = await createHarness('codex');
+    const codexHome = join(h.tmp.root, 'codex-home');
+    const target = join(h.tmp.root, 'next-workspace');
+    await Promise.all([mkdir(codexHome), mkdir(target)]);
+    await writeFile(join(codexHome, 'config.toml'), '[profiles.freerouter]\nmodel = "free"\n');
+    h.controls.profileConfig.codex!.codexHome = codexHome;
+    h.controls.profileConfig.codex!.profile = 'freerouter';
+
+    await expect(h.run(`/cd ${target}`)).resolves.toBe(true);
+
+    const card = lastContentString(h.channel);
+    expect(card).toContain('选择 Codex 启动方式');
+    expect(card).toContain('freerouter');
+    expect(card).toContain('默认配置（不传 --profile）');
+    expect(h.workspaces.codexLaunchPendingFor('chat-1')).toBe(true);
+    expect(h.workspaces.selectionFor('chat-1')?.launchMode).toBeUndefined();
+    expect(h.controls.profileConfig.codex?.profile).toBe('freerouter');
+    expect(h.workspaces.codexProfileFor('chat-1', 'freerouter')).toBe('freerouter');
+
+    await h.dispatchLaunch('__default__', 'new');
+
+    expect(h.workspaces.codexLaunchPendingFor('chat-1')).toBe(false);
+    expect(h.workspaces.selectionFor('chat-1')).toMatchObject({
+      codexProfile: null,
+      launchMode: 'new',
+    });
+    expect(h.workspaces.codexProfileFor('chat-1', 'freerouter')).toBeUndefined();
+    expect(lastMarkdown(h.channel)).toContain('无 `--profile`');
+  });
+
+  it('keeps a requested Codex resume pending until a concrete history thread is selected', async () => {
+    const h = await createHarness('codex');
+    h.codexHistory.push(codexThread('thread-resume', 'resume me', 1_700_000_100_000));
+
+    await expect(h.run(`/cd ${h.tmp.workspace}`)).resolves.toBe(true);
+    await h.dispatchLaunch('freerouter', 'resume');
+
+    expect(h.workspaces.codexLaunchPendingFor('chat-1')).toBe(true);
+    expect(lastContentString(h.channel)).toContain('resume me');
+    const [nonce] = resumeArgsFromCard(lastContent(h.channel));
+    await h.dispatchResumeArg(nonce!);
+
+    expect(h.workspaces.codexLaunchPendingFor('chat-1')).toBe(false);
+    expect(h.workspaces.selectionFor('chat-1')).toMatchObject({
+      codexProfile: 'freerouter',
+      launchMode: 'resume',
+    });
+    const selectedIdentity = await commandIdentity(
+      'codex',
+      h.controls.profileConfig,
+      h.controls,
+      h.tmp.workspace,
+      'freerouter',
+    );
+    expect(h.catalog.activeFor(selectedIdentity)).toMatchObject({ threadId: 'thread-resume' });
+  });
+
+  it('persists Codex permissions per scope, clamps full access, and displays the effective value', async () => {
+    const h = await createHarness('codex');
+    h.controls.profileConfig.permissions.maxAccess = 'workspace';
+
+    await expect(h.run('/permission full')).resolves.toBe(true);
+
+    expect(h.workspaces.codexSandboxFor('chat-1')).toBe('workspace-write');
+    expect(lastMarkdown(h.channel)).toContain('超过配置上限');
+    expect(lastMarkdown(h.channel)).toContain('workspace-write');
+
+    await expect(h.run('/status')).resolves.toBe(true);
+    const status = lastContentString(h.channel);
+    expect(status).toContain('workspace-write (max workspace-write)');
+    expect(status).toContain('默认（无 --profile）');
+
+    await expect(h.run('/permissions')).resolves.toBe(true);
+    const picker = lastContentString(h.channel);
+    expect(picker).toContain('Full access');
+    expect(picker).toContain('workspace-write');
+  });
+
+  it('prints an exact remote attach command for the current Codex thread', async () => {
+    const h = await createHarness('codex');
+    h.catalog.upsertActive({ ...h.identity, threadId: 'thread-current', now: 1000 });
+
+    await expect(h.run('/attach')).resolves.toBe(true);
+
+    expect(lastMarkdown(h.channel)).toContain(
+      'codex --remote unix:///tmp/fake-codex.sock resume thread-current',
+    );
+  });
+
+  it('maps remote-semantic Codex slash commands to app-server and persists local turn settings', async () => {
+    const h = await createHarness('codex');
+    h.catalog.upsertActive({ ...h.identity, threadId: 'thread-current', now: 1000 });
+
+    await expect(h.run('/rename release prep')).resolves.toBe(true);
+    expect(h.agent.appServerRequests.at(-1)).toMatchObject({
+      method: 'thread/name/set',
+      params: { threadId: 'thread-current', name: 'release prep' },
+    });
+
+    await expect(h.run('/goal finish tests')).resolves.toBe(true);
+    expect(h.agent.appServerRequests.at(-1)).toMatchObject({
+      method: 'thread/goal/set',
+      params: { threadId: 'thread-current', objective: 'finish tests', status: 'active' },
+    });
+
+    await expect(h.run('/model gpt-test')).resolves.toBe(true);
+    await expect(h.run('/personality pragmatic')).resolves.toBe(true);
+    expect(h.workspaces.codexModelFor('chat-1')).toBe('gpt-test');
+    expect(h.workspaces.codexPersonalityFor('chat-1')).toBe('pragmatic');
+  });
+
+  it('maps the remaining app-server-backed Codex commands and aliases', async () => {
+    const h = await createHarness('codex');
+    h.catalog.upsertActive({ ...h.identity, threadId: 'thread-current', now: 1000 });
+    h.agent.setAppServerResponse('thread/resume', {
+      thread: { id: 'thread-current' },
+      model: 'gpt-test',
+      serviceTier: null,
+    });
+    h.agent.setAppServerResponse('collaborationMode/list', {
+      data: [
+        { name: 'Plan', mode: 'plan', model: null, reasoning_effort: 'medium' },
+        { name: 'Default', mode: 'default', model: null, reasoning_effort: null },
+      ],
+    });
+    h.agent.setAppServerResponse('experimentalFeature/list', {
+      data: [{
+        name: 'network_proxy',
+        displayName: 'Network proxy',
+        description: 'Proxy sandbox traffic',
+        stage: 'beta',
+        enabled: false,
+      }],
+    });
+    h.agent.setAppServerResponse('thread/backgroundTerminals/list', {
+      data: [{ processId: '42', command: 'pnpm test', cwd: h.tmp.workspace }],
+    });
+
+    await expect(h.run('/fast on')).resolves.toBe(true);
+    expect(h.agent.appServerRequests.at(-1)).toMatchObject({
+      method: 'thread/settings/update',
+      params: { threadId: 'thread-current', serviceTier: 'fast' },
+    });
+
+    await expect(h.run('/plan')).resolves.toBe(true);
+    expect(h.agent.appServerRequests.at(-1)).toMatchObject({
+      method: 'thread/settings/update',
+      params: {
+        threadId: 'thread-current',
+        collaborationMode: {
+          mode: 'plan',
+          settings: { model: 'gpt-test', reasoning_effort: 'medium' },
+        },
+      },
+    });
+
+    await expect(h.run('/memories enabled')).resolves.toBe(true);
+    expect(h.agent.appServerRequests.at(-1)).toMatchObject({
+      method: 'thread/memoryMode/set',
+      params: { threadId: 'thread-current', mode: 'enabled' },
+    });
+
+    await expect(h.run('/debug-config')).resolves.toBe(true);
+    expect(h.agent.appServerRequests.slice(-2).map((request) => request.method)).toEqual([
+      'config/read',
+      'configRequirements/read',
+    ]);
+
+    await expect(h.run('/experimental network_proxy on')).resolves.toBe(true);
+    expect(h.agent.appServerRequests.slice(-2)).toMatchObject([
+      {
+        method: 'config/value/write',
+        params: {
+          keyPath: 'features.network_proxy',
+          value: true,
+          mergeStrategy: 'upsert',
+        },
+      },
+      {
+        method: 'experimentalFeature/enablement/set',
+        params: { enablement: { network_proxy: true } },
+      },
+    ]);
+
+    await expect(h.run('/ps')).resolves.toBe(true);
+    expect(h.agent.appServerRequests.at(-1)).toMatchObject({
+      method: 'thread/backgroundTerminals/list',
+      params: { threadId: 'thread-current', limit: 100 },
+    });
+    expect(lastMarkdown(h.channel)).toContain('pnpm test');
+
+    await expect(h.run('/clean')).resolves.toBe(true);
+    expect(h.agent.appServerRequests.at(-1)).toMatchObject({
+      method: 'thread/backgroundTerminals/clean',
+      params: { threadId: 'thread-current' },
+    });
+
+    await expect(h.run('/delete')).resolves.toBe(true);
+    expect(lastMarkdown(h.channel)).toContain('/delete confirm');
+    expect(h.agent.appServerRequests.some((request) => request.method === 'thread/delete')).toBe(false);
+
+    await expect(h.run('/delete confirm')).resolves.toBe(true);
+    expect(h.agent.appServerRequests.at(-1)).toMatchObject({
+      method: 'thread/delete',
+      params: { threadId: 'thread-current' },
+    });
+  });
+
+  it('consumes TUI-only and unknown Codex slash commands instead of sending them to the model', async () => {
+    const h = await createHarness('codex');
+    h.catalog.upsertActive({ ...h.identity, threadId: 'thread-current', now: 1000 });
+
+    await expect(h.run('/theme')).resolves.toBe(true);
+    expect(lastMarkdown(h.channel)).toContain('codex --remote');
+    await expect(h.run('/btw')).resolves.toBe(true);
+    expect(lastMarkdown(h.channel)).toContain('codex --remote');
+    await expect(h.run('/does-not-exist')).resolves.toBe(true);
+    expect(lastMarkdown(h.channel)).toContain('未识别 Codex 命令');
+    expect(h.agent.runOptions).toHaveLength(0);
+  });
 });
 
 async function createHarness(
@@ -279,7 +538,7 @@ async function createHarness(
   const codexHistory: CodexThreadHistoryEntry[] = [];
   const activeRuns = new ActiveRuns();
   const pending = new PendingQueue(60_000, () => {});
-  const agent = createFakeAgent();
+  const agent = new FakeAgentAdapter({ id: agentKind, displayName: agentKind === 'codex' ? 'Codex CLI' : 'Claude Code' });
   const profileConfig = appConfig(agentKind);
   if (options.defaultWorkspace !== false) {
     profileConfig.workspaces.default = tmp.workspace;
@@ -336,6 +595,27 @@ async function createHarness(
       controls,
       pending,
       chatModeCache,
+      codexHistoryProvider: async () => codexHistory,
+      claudeHistoryProvider: async () => claudeHistory,
+    });
+
+  const dispatchLaunch = (profile: string, mode: 'new' | 'resume'): Promise<void> =>
+    handleCardAction({
+      channel: channel as unknown as Parameters<typeof handleCardAction>[0]['channel'],
+      evt: cardEvent(
+        { cmd: 'ws.launch' },
+        { codex_profile: profile, launch_mode: mode },
+      ),
+      sessions,
+      sessionCatalog: catalog,
+      workspaces,
+      activeRuns,
+      agent,
+      controls,
+      pending,
+      chatModeCache,
+      codexHistoryProvider: async () => codexHistory,
+      claudeHistoryProvider: async () => claudeHistory,
     });
 
   cleanups.push(async () => {
@@ -351,6 +631,7 @@ async function createHarness(
     workspaces,
     catalog,
     controls,
+    agent,
     identity,
     claudeHistory,
     codexHistory,
@@ -358,6 +639,7 @@ async function createHarness(
     pending,
     run,
     dispatchResumeArg,
+    dispatchLaunch,
   };
 }
 
@@ -379,6 +661,7 @@ async function commandIdentity(
   profileConfig: ProfileConfig,
   controls: Controls,
   cwd: string,
+  codexProfile?: string,
 ): Promise<SessionCatalogIdentity> {
   const workspace = await resolveWorkingDirectory(cwd);
   if (!workspace.ok) throw new Error(workspace.userVisible);
@@ -400,6 +683,7 @@ async function commandIdentity(
     now: Date.now(),
     codexHome: profileConfig.codex?.codexHome,
     inheritCodexHome: profileConfig.codex?.inheritCodexHome,
+    codexProfile,
   });
   if (!policy.ok) throw new Error(policy.rejectReason.userVisible);
   return {
@@ -432,7 +716,10 @@ function message(content: string): NormalizedMessage {
   } as unknown as NormalizedMessage;
 }
 
-function cardEvent(value: Record<string, unknown>): CardActionEvent {
+function cardEvent(
+  value: Record<string, unknown>,
+  formValue?: Record<string, unknown>,
+): CardActionEvent {
   return {
     action: { value },
     chatId: 'chat-1',
@@ -441,6 +728,7 @@ function cardEvent(value: Record<string, unknown>): CardActionEvent {
       openId: 'ou-user',
       name: 'User',
     },
+    ...(formValue ? { raw: { action: { form_value: formValue } } } : {}),
   } as unknown as CardActionEvent;
 }
 

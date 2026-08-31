@@ -195,12 +195,13 @@ describe('markdown stream startup failures', () => {
     await startTestBridge(h);
 
     await h.channel.handlers.message?.(message('om_final', 'run'));
-    await waitFor(() => h.channel.sent.length === 1);
+    await waitFor(() => h.channel.sent.length === 2);
 
     expect(visibleProgress.some((markdown) => markdown.includes('progress update'))).toBe(true);
-    expect(h.channel.sent).toHaveLength(1);
+    expect(h.channel.sent).toHaveLength(2);
+    expect(JSON.stringify(h.channel.sent[0]?.content)).toContain('Codex 完整轨迹');
     expect(lastMarkdown(h.channel)).toContain('FINAL_SENTINEL');
-    expect(h.channel.sent[0]?.options).toMatchObject({ replyTo: 'om_final' });
+    expect(h.channel.sent[1]?.options).toMatchObject({ replyTo: 'om_final' });
   });
 
   it('opens no progress stream for a final-only round', async () => {
@@ -259,7 +260,9 @@ describe('markdown stream startup failures', () => {
     // give a (duplicate) final reply a chance to fire before asserting
     await new Promise((resolve) => setTimeout(resolve, 80));
 
-    expect(h.channel.sent).toHaveLength(0);
+    expect(h.channel.sent).toHaveLength(1);
+    expect(JSON.stringify(h.channel.sent[0]?.content)).toContain('Codex 完整轨迹');
+    expect(h.channel.sent[0]?.content).not.toHaveProperty('markdown');
   });
 
   it('waits for a slow-opening progress stream instead of replying alongside it', async () => {
@@ -345,8 +348,9 @@ describe('markdown stream startup failures', () => {
     await startTestBridge(h);
 
     await h.channel.handlers.message?.(message('om_stream_fail', 'run'));
-    await waitFor(() => h.channel.sent.length === 1);
+    await waitFor(() => h.channel.sent.length === 2);
 
+    expect(JSON.stringify(h.channel.sent[0]?.content)).toContain('Codex 完整轨迹');
     expect(lastMarkdown(h.channel)).toContain('FINAL_AFTER_STREAM_FAILURE');
     expect(
       fail.mock.calls.some(
@@ -355,6 +359,44 @@ describe('markdown stream startup failures', () => {
           call[1] instanceof Error &&
           call[1].message === 'progress stream failed' &&
           (call[2] as { step?: string } | undefined)?.step === 'progress-stream',
+      ),
+    ).toBe(true);
+  });
+
+  it('still sends the final reply when a Codex trace card fails', async () => {
+    const warn = vi.spyOn(log, 'warn').mockImplementation(() => {});
+    let sendCalls = 0;
+    const h = await createHarness({
+      events: [
+        { type: 'text', delta: 'trace content' },
+        { type: 'final_text', content: 'FINAL_AFTER_TRACE_FAILURE' },
+        { type: 'done', terminationReason: 'normal' },
+      ],
+      send: async () => {
+        sendCalls += 1;
+        if (sendCalls === 1) throw new Error('trace card rejected');
+        return { messageId: 'final_message' };
+      },
+      stream: async (_chatId, input) => {
+        const producer = (input as {
+          markdown?: (ctrl: { setContent(markdown: string): Promise<void> }) => Promise<void>;
+        }).markdown;
+        await producer?.({ setContent: vi.fn(async () => {}) });
+      },
+    });
+    await startTestBridge(h);
+
+    await h.channel.handlers.message?.(message('om_trace_fail', 'run'));
+    await waitFor(() => h.channel.sent.length === 2);
+
+    expect(JSON.stringify(h.channel.sent[0]?.content)).toContain('Codex 完整轨迹');
+    expect(lastMarkdown(h.channel)).toContain('FINAL_AFTER_TRACE_FAILURE');
+    expect(
+      warn.mock.calls.some(
+        (call) =>
+          call[0] === 'outbound'
+          && call[1] === 'codex-trace-failed'
+          && (call[2] as { err?: string } | undefined)?.err === 'trace card rejected',
       ),
     ).toBe(true);
   });
@@ -412,7 +454,7 @@ describe('markdown stream startup failures', () => {
     await startTestBridge(h);
 
     await h.channel.handlers.message?.(message('om_card_final', 'run'));
-    await waitFor(() => h.channel.sent.length === 1);
+    await waitFor(() => h.channel.sent.length === 2);
 
     // Intermediate agent messages stream as progress; the final answer never
     // leaks into the progress card (it is held back for the dedicated reply).
@@ -420,12 +462,13 @@ describe('markdown stream startup failures', () => {
     expect(progressJson).toContain('progress update');
     expect(progressJson).not.toContain('FINAL_SENTINEL');
 
-    // The terminal answer arrives as exactly one non-streaming card send.
-    expect(h.channel.sent).toHaveLength(1);
-    const finalJson = JSON.stringify(h.channel.sent[0]?.content);
+    // The terminal answer arrives after the complete trace card.
+    expect(h.channel.sent).toHaveLength(2);
+    expect(JSON.stringify(h.channel.sent[0]?.content)).toContain('Codex 完整轨迹');
+    const finalJson = JSON.stringify(h.channel.sent[1]?.content);
     expect(finalJson).toContain('FINAL_SENTINEL');
     expect(finalJson).not.toContain('progress update');
-    expect(h.channel.sent[0]?.options).toMatchObject({ replyTo: 'om_card_final' });
+    expect(h.channel.sent[1]?.options).toMatchObject({ replyTo: 'om_card_final' });
   });
 });
 

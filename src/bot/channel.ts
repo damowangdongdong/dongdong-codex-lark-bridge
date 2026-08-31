@@ -14,11 +14,12 @@ import {
   type BridgePromptQuotedMessage,
   type BridgePromptTopicMessage,
 } from '../agent/prompt';
-import type { AgentAdapter, AgentEvent } from '../agent/types';
+import type { AgentAdapter, AgentEvent, AgentExternalRun } from '../agent/types';
 import { handleCardAction } from '../card/dispatcher';
 import { CallbackAuth } from '../card/callback-auth';
 import { CallbackNonceStore } from '../card/callback-store';
-import { renderCard } from '../card/run-renderer';
+import { renderRunTraceCards } from '../card/codex-trace';
+import { renderCard, type RunCardRenderOptions } from '../card/run-renderer';
 import {
   finalizeIfRunning,
   initialState,
@@ -306,6 +307,7 @@ export async function startChannel(deps: StartChannelDeps): Promise<BridgeChanne
         }
         await runAgentBatch({
           channel,
+          agent,
           executor,
           sessions,
           sessionCatalog,
@@ -327,6 +329,19 @@ export async function startChannel(deps: StartChannelDeps): Promise<BridgeChanne
         log.info('flush', 'end');
       }
     });
+  });
+
+  const unsubscribeExternalRuns = agent.onExternalRun?.((external) => {
+    void withTrace({ chatId: external.binding.chatId }, () =>
+      renderExternalCodexRun({
+        channel,
+        external,
+        activeRuns,
+        pending,
+        callbackAuth,
+        activePolicyFingerprints,
+      }),
+    ).catch((err) => log.fail('codex-external-turn', err));
   });
 
   // Counter for stdout reconnect escalation; reset on `reconnected`.
@@ -519,9 +534,10 @@ export async function startChannel(deps: StartChannelDeps): Promise<BridgeChanne
       meetingManager?.dispose();
       controls.meeting = undefined;
       pending.cancelAll();
+      unsubscribeExternalRuns?.();
       const [disconnectResult, stopAllResult, ...flushResults] = await Promise.allSettled([
         channel.disconnect(),
-        activeRuns.stopAll(),
+        activeRuns.stopAll().then(() => agent.close?.()),
         sessions.flush(),
         sessionCatalog?.flush(),
         callbackNonceStore?.flush(),
@@ -540,6 +556,109 @@ export async function startChannel(deps: StartChannelDeps): Promise<BridgeChanne
       }
     },
   };
+}
+
+export async function renderExternalCodexRun(input: {
+  channel: LarkChannel;
+  external: AgentExternalRun;
+  activeRuns: ActiveRuns;
+  pending: PendingQueue;
+  callbackAuth?: CallbackAuth;
+  activePolicyFingerprints: Map<string, string>;
+}): Promise<void> {
+  const { binding, run } = input.external;
+  if (input.activeRuns.get(binding.scopeId)) {
+    log.warn('codex-external-turn', 'scope-already-active', { scope: binding.scopeId });
+    for await (const _event of run.events) {
+      // Drain the adapter stream; the already-active run owns this scope's UI.
+    }
+    return;
+  }
+
+  let handle: RunHandle;
+  try {
+    handle = input.activeRuns.register(binding.scopeId, run);
+  } catch (err) {
+    log.warn('codex-external-turn', 'register-failed', {
+      scope: binding.scopeId,
+      message: err instanceof Error ? err.message : String(err),
+    });
+    for await (const _event of run.events) {
+      // Drain notifications even when another run won the scope race.
+    }
+    return;
+  }
+
+  input.pending.block(binding.scopeId);
+  if (binding.policyFingerprint) {
+    input.activePolicyFingerprints.set(binding.scopeId, binding.policyFingerprint);
+  }
+  const cardOptions: RunCardRenderOptions = {
+    interactiveInput: true,
+    codexContext: { profile: binding.profile, sandbox: binding.sandbox },
+    ...(input.callbackAuth && binding.policyFingerprint
+      ? {
+          signCallback: (action: string) =>
+            input.callbackAuth!.sign({
+              runId: run.runId,
+              scope: binding.scopeId,
+              chatId: binding.chatId,
+              operatorOpenId: binding.operatorOpenId,
+              action,
+              policyFingerprint: binding.policyFingerprint!,
+              ttlMs: 24 * 60 * 60 * 1000,
+            }),
+        }
+      : {}),
+  };
+  let state: RunState = initialState;
+  let controller: { update(next: object | ((current: object) => object)): Promise<void> } | undefined;
+  const consume = (async () => {
+    for await (const event of run.events) {
+      state = reduce(state, event);
+      if (controller) await controller.update(renderCard(state, cardOptions));
+    }
+    state = finalizeIfRunning(state);
+    if (controller) await controller.update(renderCard(state, cardOptions));
+  })();
+
+  try {
+    await input.channel.stream(
+      binding.chatId,
+      {
+        card: {
+          initial: renderCard(state, cardOptions),
+          producer: async (ctrl) => {
+            controller = ctrl;
+            await ctrl.update(renderCard(state, cardOptions));
+            await consume;
+          },
+        },
+      },
+      binding.messageThreadId && binding.replyTo
+        ? { replyTo: binding.replyTo, replyInThread: true }
+        : undefined,
+    );
+    await consume;
+    await sendFinalReply({
+      channel: input.channel,
+      chatId: binding.chatId,
+      scope: binding.scopeId,
+      state: finalAnswerOnlyState(state),
+      traceState: state,
+      codexContext: { profile: binding.profile, sandbox: binding.sandbox },
+      replyMode: 'card',
+      sendOpts:
+        binding.messageThreadId && binding.replyTo
+          ? { replyTo: binding.replyTo, replyInThread: true }
+          : undefined,
+      cardRenderOptions: cardOptions,
+    });
+  } finally {
+    input.activeRuns.unregister(binding.scopeId, run);
+    input.activePolicyFingerprints.delete(binding.scopeId);
+    input.pending.unblock(binding.scopeId);
+  }
 }
 
 function startKnownChatsRefreshTimer(
@@ -776,11 +895,53 @@ async function intakeMessage(deps: IntakeDeps): Promise<void> {
     runExecutor: executor,
     processPool: pool,
     controls,
+    pending,
   });
   if (handled) {
     const dropped = pending.cancel(scope);
     log.info('intake', 'command', { scope, droppedPending: dropped.length });
     return;
+  }
+
+  if (agent.id === 'codex') {
+    const queueMatch = emsg.content.trim().match(/^\/queue(?:\s+([\s\S]+))?$/);
+    if (queueMatch) {
+      const queuedContent = queueMatch[1]?.trim();
+      if (!queuedContent) {
+        await channel.send(
+          emsg.chatId,
+          { markdown: '用法：`/queue <下一条指令>`' },
+          { replyTo: emsg.messageId, ...(chatMode === 'topic' ? { replyInThread: true } : {}) },
+        );
+        return;
+      }
+      const size = pending.push(scope, { ...emsg, content: queuedContent });
+      await channel.send(
+        emsg.chatId,
+        { markdown: `⇥ 已排队（当前等待 ${size} 条），会在当前 turn 完成后执行。` },
+        { replyTo: emsg.messageId, ...(chatMode === 'topic' ? { replyInThread: true } : {}) },
+      );
+      return;
+    }
+
+    const active = activeRuns.get(scope);
+    if (active?.run.steer && emsg.resources.length === 0) {
+      try {
+        await active.run.steer(buildPrompt([emsg], [], [], [], channel.botIdentity));
+        await channel.send(
+          emsg.chatId,
+          { markdown: '↵ 已立即插入当前 Codex turn。' },
+          { replyTo: emsg.messageId, ...(chatMode === 'topic' ? { replyInThread: true } : {}) },
+        );
+        log.info('intake', 'steered', { scope, msgId: emsg.messageId });
+        return;
+      } catch (err) {
+        log.warn('intake', 'steer-raced-with-completion', {
+          scope,
+          message: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
   }
 
   const size = pending.push(scope, emsg);
@@ -789,6 +950,7 @@ async function intakeMessage(deps: IntakeDeps): Promise<void> {
 
 interface RunBatchDeps {
   channel: LarkChannel;
+  agent: AgentAdapter;
   executor: RunExecutor;
   sessions: SessionStore;
   sessionCatalog?: SessionCatalog;
@@ -807,6 +969,7 @@ interface RunBatchDeps {
 async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
   const {
     channel,
+    agent,
     executor,
     sessions,
     sessionCatalog,
@@ -1024,6 +1187,22 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
     }
     if (evt.type === 'system' && evt.threadId) {
       log.info('session', 'set-thread', { threadId: evt.threadId });
+      const codexProfile = workspaces.codexProfileFor(
+        scope,
+        controls.profileConfig.codex?.profile,
+      );
+      agent.bindRemoteThread?.({
+        scopeId: scope,
+        chatId,
+        threadId: evt.threadId,
+        ...(threadId ? { messageThreadId: threadId } : {}),
+        replyTo: lastMsg.messageId,
+        operatorOpenId: firstMsg.senderId,
+        ...(codexProfile ? { profile: codexProfile } : {}),
+        cwd,
+        sandbox: flow.policy.sandbox,
+        policyFingerprint: flow.policy.policyFingerprint,
+      });
     }
   };
 
@@ -1051,8 +1230,9 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
     if (getShowToolCalls(controls.cfg)) return state;
     return { ...state, blocks: state.blocks.filter((b) => b.kind !== 'tool') };
   };
-  const cardRenderOptions = callbackAuth
-    ? {
+  const cardRenderOptions: RunCardRenderOptions = {
+    ...(callbackAuth
+      ? {
         signCallback: (action: string) =>
           callbackAuth.sign({
             runId: execution.runId,
@@ -1063,8 +1243,18 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
             policyFingerprint: flow.policy.policyFingerprint,
             ttlMs: 24 * 60 * 60 * 1000,
           }),
-      }
-    : {};
+        }
+      : {}),
+    interactiveInput: controls.profileConfig.agentKind === 'codex',
+    ...(controls.profileConfig.agentKind === 'codex'
+      ? {
+          codexContext: {
+            profile: workspaces.codexProfileFor(scope, controls.profileConfig.codex?.profile),
+            sandbox: flow.policy.sandbox,
+          },
+        }
+      : {}),
+  };
 
   // For non-card modes Claude's output doesn't surface visually until either
   // a first streamed token (markdown mode) or the whole run ends (text mode).
@@ -1115,6 +1305,8 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
           chatId,
           scope,
           state: finalAnswerOnlyState(finalState),
+          traceState: finalState,
+          codexContext: cardRenderOptions.codexContext,
           replyMode,
           sendOpts,
           cardRenderOptions,
@@ -1189,6 +1381,8 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
           chatId,
           scope,
           state: finalReplyState(progress, filterForPrefs(latestState)),
+          traceState: latestState,
+          codexContext: cardRenderOptions.codexContext,
           replyMode,
           sendOpts,
           cardRenderOptions,
@@ -1252,6 +1446,8 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
           chatId,
           scope,
           state: finalReplyState(progress, filterForPrefs(latestState)),
+          traceState: latestState,
+          codexContext: cardRenderOptions.codexContext,
           replyMode,
           sendOpts,
           cardRenderOptions,
@@ -1277,6 +1473,12 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
           controls.profileConfig.agentKind === 'codex'
             ? finalAnswerOnlyState(filterForPrefs(finalState))
             : filterForPrefs(finalState),
+        ...(controls.profileConfig.agentKind === 'codex'
+          ? {
+              traceState: finalState,
+              codexContext: cardRenderOptions.codexContext,
+            }
+          : {}),
         replyMode,
         sendOpts,
         cardRenderOptions,
@@ -1446,10 +1648,37 @@ async function sendFinalReply(input: {
   chatId: string;
   scope: string;
   state: RunState;
+  traceState?: RunState;
+  codexContext?: { profile?: string; sandbox: string };
   replyMode: ReturnType<typeof getMessageReplyMode>;
-  sendOpts: { replyTo: string; replyInThread?: boolean };
+  sendOpts?: { replyTo: string; replyInThread?: boolean };
   cardRenderOptions: { signCallback?: (action: string) => string };
 }): Promise<void> {
+  if (input.traceState && input.codexContext) {
+    const cards = renderRunTraceCards(input.traceState, input.codexContext);
+    let sentPages = 0;
+    try {
+      for (const card of cards) {
+        const result = await input.channel.send(input.chatId, { card }, input.sendOpts);
+        requireMessageReceipt(result, 'Codex trace card');
+        sentPages += 1;
+      }
+      if (cards.length) {
+        log.info('outbound', 'codex-trace-sent', {
+          scope: input.scope,
+          pages: cards.length,
+        });
+      }
+    } catch (err) {
+      log.warn('outbound', 'codex-trace-failed', {
+        scope: input.scope,
+        sentPages,
+        pages: cards.length,
+        err: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
   const body = renderText(input.state);
 
   // Nothing deliverable to send (agent produced no text on a clean finish;

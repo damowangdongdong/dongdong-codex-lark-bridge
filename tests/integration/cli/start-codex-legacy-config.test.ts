@@ -1,4 +1,5 @@
 import { chmod, mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -47,13 +48,17 @@ describe('Codex startup compatibility with legacy binary metadata', () => {
       configPath: h.configPath,
     });
 
-    await expect(
-      agent.prepareRun?.({
-        runId: 'run-1',
-        prompt: 'hello',
-        cwd: h.workspace,
-      }),
-    ).resolves.toBeUndefined();
+    try {
+      await expect(
+        agent.prepareRun?.({
+          runId: 'run-1',
+          prompt: 'hello',
+          cwd: h.workspace,
+        }),
+      ).resolves.toBeUndefined();
+    } finally {
+      await agent.close?.();
+    }
   });
 });
 
@@ -75,15 +80,26 @@ async function createLegacyCodexConfig(options: {
     mkdir(binDir, { recursive: true }),
   ]);
   const codex = join(binDir, 'codex');
+  const wsEntry = createRequire(import.meta.url).resolve('ws');
   await writeFile(
     codex,
     [
-      '#!/bin/sh',
-      'if [ "$1" = "--version" ]; then',
-      '  echo "codex-cli 999.0.0"',
-      '  exit 0',
-      'fi',
-      'exit 0',
+      `#!${process.execPath}`,
+      "import { createServer } from 'node:http';",
+      `import ws from ${JSON.stringify(wsEntry)};`,
+      'const { WebSocketServer } = ws;',
+      'const argv = process.argv.slice(2);',
+      "if (argv[0] === '--version') { console.log('codex-cli 999.0.0'); process.exit(0); }",
+      "const endpoint = argv[argv.indexOf('--listen') + 1];",
+      "const socketPath = endpoint.slice('unix://'.length);",
+      'const server = createServer();',
+      'const wss = new WebSocketServer({ server });',
+      "wss.on('connection', (socket) => socket.on('message', (raw) => {",
+      '  const message = JSON.parse(String(raw));',
+      "  if (message.method === 'initialize') socket.send(JSON.stringify({ id: message.id, result: { userAgent: 'fake', platformFamily: 'unix', platformOs: 'linux' } }));",
+      '}));',
+      'server.listen(socketPath);',
+      "process.on('SIGTERM', () => server.close(() => process.exit(0)));",
       '',
     ].join('\n'),
     'utf8',

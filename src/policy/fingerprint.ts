@@ -10,6 +10,7 @@ export interface FingerprintInputV2 {
   attachmentPolicyShapeDigest: string;
   codexHome?: string;
   inheritCodexHome: boolean;
+  codexProfile?: string;
 }
 
 export interface ResourceScopeDigestInput {
@@ -41,6 +42,7 @@ export function policyFingerprint(input: FingerprintInputV2): string {
     attachmentPolicyShapeDigest: input.attachmentPolicyShapeDigest,
     codexHome: input.codexHome ?? null,
     inheritCodexHome: input.inheritCodexHome,
+    codexProfile: input.codexProfile ?? null,
   });
 }
 

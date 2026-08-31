@@ -10,6 +10,7 @@ export interface FakeAgentRun extends AgentRun {
   readonly opts: AgentRunOptions;
   readonly stopped: boolean;
   readonly waitForExitCalls: number;
+  readonly steered: Array<{ prompt: string; images: readonly string[] }>;
 }
 
 class FakeRun implements FakeAgentRun {
@@ -17,6 +18,7 @@ class FakeRun implements FakeAgentRun {
   readonly opts: AgentRunOptions;
   readonly events: AsyncIterable<AgentEvent>;
   readonly waitForExitResult: boolean;
+  readonly steered: Array<{ prompt: string; images: readonly string[] }> = [];
   #stopped = false;
   #waitForExitCalls = 0;
 
@@ -43,6 +45,10 @@ class FakeRun implements FakeAgentRun {
     this.#stopped = true;
   }
 
+  async steer(prompt: string, images: readonly string[] = []): Promise<void> {
+    this.steered.push({ prompt, images });
+  }
+
   async waitForExit(): Promise<boolean> {
     this.#waitForExitCalls++;
     return this.waitForExitResult;
@@ -66,6 +72,9 @@ export class FakeAgentAdapter implements AgentAdapter {
   readonly runs: FakeAgentRun[] = [];
   readonly runOptions: AgentRunOptions[] = [];
   botIdentity: AgentBotIdentity | undefined;
+  readonly appServerRequests: Array<{ profile?: string; method: string; params?: unknown }> = [];
+  appServerEndpointValue = 'unix:///tmp/fake-codex.sock';
+  private readonly appServerResponses = new Map<string, unknown>();
   #available: boolean;
   #eventRuns: AgentEvent[][];
   #waitForExitResults: boolean[];
@@ -116,6 +125,19 @@ export class FakeAgentAdapter implements AgentAdapter {
 
   setWaitForExit(result: boolean | readonly boolean[]): void {
     this.#waitForExitResults = normalizeWaitForExitResults(result);
+  }
+
+  async appServerRequest(profile: string | undefined, method: string, params?: unknown): Promise<unknown> {
+    this.appServerRequests.push({ ...(profile ? { profile } : {}), method, ...(params === undefined ? {} : { params }) });
+    return this.appServerResponses.get(method) ?? {};
+  }
+
+  async appServerEndpoint(): Promise<string> {
+    return this.appServerEndpointValue;
+  }
+
+  setAppServerResponse(method: string, response: unknown): void {
+    this.appServerResponses.set(method, response);
   }
 }
 

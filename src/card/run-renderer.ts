@@ -13,14 +13,24 @@ interface TextGroup {
   kind: 'text';
   content: string;
 }
-type Group = ToolGroup | TextGroup;
+interface UserGroup {
+  kind: 'user';
+  content: string;
+}
+type Group = ToolGroup | TextGroup | UserGroup;
 
 export interface RunCardRenderOptions {
   signCallback?: (action: string) => string;
+  interactiveInput?: boolean;
+  codexContext?: { profile?: string; sandbox: string };
 }
 
 export function renderCard(state: RunState, options: RunCardRenderOptions = {}): object {
   const elements: object[] = [];
+
+  if (options.codexContext) {
+    elements.push(codexContextLine(state, options.codexContext));
+  }
 
   if (state.reasoning.content) {
     elements.push(reasoningPanel(state.reasoning.content, state.reasoning.active));
@@ -31,6 +41,13 @@ export function renderCard(state: RunState, options: RunCardRenderOptions = {}):
       if (group.content.trim()) {
         elements.push(markdown(group.content));
       }
+    } else if (group.kind === 'user') {
+      elements.push(collapsiblePanel({
+        title: '👤 **终端输入**',
+        expanded: true,
+        border: 'blue',
+        body: group.content,
+      }));
     } else {
       elements.push(...renderToolGroup(group.tools, state.terminal !== 'running'));
     }
@@ -49,6 +66,7 @@ export function renderCard(state: RunState, options: RunCardRenderOptions = {}):
 
   if (state.terminal === 'running') {
     if (state.footer) elements.push(footerStatus(state.footer));
+    if (options.interactiveInput) elements.push(codexInput(options));
     elements.push(stopButton(options));
   }
 
@@ -64,6 +82,69 @@ export function renderCard(state: RunState, options: RunCardRenderOptions = {}):
   });
 }
 
+function codexContextLine(
+  state: RunState,
+  context: NonNullable<RunCardRenderOptions['codexContext']>,
+): object {
+  const profile = context.profile ? `--profile ${context.profile}` : '默认 profile';
+  const thread = state.session?.threadId ? ` · thread ${state.session.threadId.slice(0, 8)}…` : '';
+  return noteMd(`🧭 **Codex** · ${profile} · 🛡 ${context.sandbox}${thread}`);
+}
+
+function codexInput(options: RunCardRenderOptions): object {
+  const actionValue = (cmd: string): Record<string, unknown> => {
+    const value: Record<string, unknown> = { cmd, __bridge_cb: true };
+    if (options.signCallback) value.bridge_token = options.signCallback(cmd);
+    return value;
+  };
+  return {
+    tag: 'form',
+    name: 'codex_turn_input',
+    elements: [
+      {
+        tag: 'input',
+        name: 'codex_input',
+        placeholder: { tag: 'plain_text', content: '输入补充指令…' },
+        input_type: 'multiline_text',
+      },
+      {
+        tag: 'column_set',
+        flex_mode: 'flow',
+        horizontal_spacing: 'small',
+        columns: [
+          {
+            tag: 'column',
+            width: 'auto',
+            elements: [
+              {
+                tag: 'button',
+                name: 'codex_inject',
+                text: { tag: 'plain_text', content: '↵ 立即插入' },
+                type: 'primary',
+                form_action_type: 'submit',
+                behaviors: [{ type: 'callback', value: actionValue('codex.inject') }],
+              },
+            ],
+          },
+          {
+            tag: 'column',
+            width: 'auto',
+            elements: [
+              {
+                tag: 'button',
+                name: 'codex_queue',
+                text: { tag: 'plain_text', content: '⇥ 排队' },
+                form_action_type: 'submit',
+                behaviors: [{ type: 'callback', value: actionValue('codex.queue') }],
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  };
+}
+
 function* groupBlocks(blocks: Block[]): Generator<Group> {
   let toolBuf: ToolEntry[] = [];
   for (const b of blocks) {
@@ -74,7 +155,9 @@ function* groupBlocks(blocks: Block[]): Generator<Group> {
         yield { kind: 'tools', tools: toolBuf };
         toolBuf = [];
       }
-      yield { kind: 'text', content: b.content };
+      yield b.kind === 'user'
+        ? { kind: 'user', content: b.content }
+        : { kind: 'text', content: b.content };
     }
   }
   if (toolBuf.length > 0) yield { kind: 'tools', tools: toolBuf };
@@ -117,8 +200,9 @@ function toolPanel(tool: ToolEntry, expanded: boolean): object {
 }
 
 /**
- * Render N tool calls as a single collapsed panel. **Body content is dropped**
- * — only the per-tool header line (icon + name + short summary) is kept.
+ * Render N completed tool calls as a compact live summary. The finalized card
+ * expands them back into individual panels, and the post-run trace cards carry
+ * every untruncated input/output chunk.
  *
  * Why no bodies: with full input/output panels nested, the serialized JSON
  * can easily exceed Feishu's per-element size limit (~30KB), causing 400

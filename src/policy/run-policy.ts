@@ -3,6 +3,7 @@ import {
   accessToClaudePermissionMode,
   accessToCodexSandbox,
   clampAccess,
+  codexSandboxToAccess,
   type AccessMode,
   type ClaudePermissionMode,
   type CodexSandboxMode,
@@ -54,6 +55,8 @@ export interface RunPolicyInput {
   now: number;
   codexHome?: string;
   inheritCodexHome?: boolean;
+  codexProfile?: string;
+  codexSandbox?: CodexSandboxMode;
   ttlMs?: number;
 }
 
@@ -105,7 +108,9 @@ export function evaluateRunPolicy(input: RunPolicyInput): RunPolicyResult {
   }
 
   const accessMode = clampAccess(
-    input.profileConfig.permissions.defaultAccess,
+    input.codexSandbox
+      ? codexSandboxToAccess(input.codexSandbox)
+      : input.profileConfig.permissions.defaultAccess,
     input.profileConfig.permissions.maxAccess,
     input.capability.permissions.maxAccess,
   );
@@ -146,6 +151,7 @@ export function evaluateRunPolicy(input: RunPolicyInput): RunPolicyResult {
       attachmentPolicyShapeDigest: attachmentDigest,
       codexHome: input.codexHome,
       inheritCodexHome: input.inheritCodexHome ?? false,
+      codexProfile: input.codexProfile,
     }),
   };
 }

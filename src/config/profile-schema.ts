@@ -49,6 +49,8 @@ export interface CodexConfig {
   inheritCodexHome?: boolean;
   ignoreUserConfig?: boolean;
   ignoreRules?: boolean;
+  /** Default Codex CLI config profile. Omit to launch without `--profile`. */
+  profile?: string;
 }
 
 export interface AttachmentConfig {
@@ -387,6 +389,9 @@ function normalizeCodex(input: CodexConfig & { flags?: unknown }): CodexConfig {
     inheritCodexHome: input.inheritCodexHome !== false,
     ignoreUserConfig: input.ignoreUserConfig === true,
     ignoreRules: input.ignoreRules !== false,
+    ...(typeof input.profile === 'string' && input.profile.trim()
+      ? { profile: input.profile.trim() }
+      : {}),
   };
   return codex;
 }

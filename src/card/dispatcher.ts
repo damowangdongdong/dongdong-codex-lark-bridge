@@ -12,6 +12,8 @@ import type { RunExecutor } from '../runtime/run-executor';
 import type { SessionCatalog } from '../session/catalog';
 import type { SessionStore } from '../session/store';
 import type { WorkspaceStore } from '../workspace/store';
+import type { CodexThreadHistoryEntry, ListCodexThreadHistoryOptions } from '../session/codex-history';
+import type { SessionSummary } from '../session/history';
 import { commandSessionCatalogIdentity } from '../bot/session-catalog-identity';
 import { lookupMessageThreadId } from '../bot/thread-id';
 
@@ -40,6 +42,10 @@ export interface CardDispatchDeps {
   callbackAuth?: CallbackAuth;
   callbackPolicyFingerprint?: string;
   callbackPolicyFingerprintForScope?: (scope: string) => string | undefined;
+  codexHistoryProvider?: (
+    options: ListCodexThreadHistoryOptions,
+  ) => Promise<CodexThreadHistoryEntry[]>;
+  claudeHistoryProvider?: (cwd: string, limit: number) => Promise<SessionSummary[]>;
 }
 
 export async function handleCardAction(deps: CardDispatchDeps): Promise<void> {
@@ -111,6 +117,9 @@ export async function handleCardAction(deps: CardDispatchDeps): Promise<void> {
       processPool: deps.processPool,
       runExecutor: deps.runExecutor,
       controls: deps.controls,
+      pending: deps.pending,
+      codexHistoryProvider: deps.codexHistoryProvider,
+      claudeHistoryProvider: deps.claudeHistoryProvider,
       formValue,
       fromCardAction: true,
     };

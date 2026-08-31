@@ -14,10 +14,8 @@ vi.mock('../../../src/platform/spawn', async (importOriginal) => {
 
 import {
   buildBridgeSystemPrompt,
-  prefixBridgeSystemPrompt,
 } from '../../../src/agent/bridge-system-prompt';
 import { ClaudeAdapter } from '../../../src/agent/claude/adapter';
-import { CodexAdapter } from '../../../src/agent/codex/adapter';
 
 interface FakeChild extends EventEmitter {
   pid: number;
@@ -79,40 +77,6 @@ describe('ClaudeAdapter system prompt wiring', () => {
     expect(args).not.toContain('--append-system-prompt');
     return readFileSync(args[flagIndex + 1] as string, 'utf8');
   }
-});
-
-describe('CodexAdapter system prompt wiring', () => {
-  function codexAdapter(): CodexAdapter {
-    return new CodexAdapter({
-      binary: '/usr/local/bin/codex',
-      profileStateDir: '/tmp/codex-profile',
-    });
-  }
-
-  it('prefixes stdin with the identity-aware bridge system prompt after setBotIdentity', async () => {
-    const child = fakeChild();
-    spawnMock.spawnProcess.mockReturnValue(child);
-    const adapter = codexAdapter();
-    adapter.setBotIdentity({ openId: 'ou_bot_self', name: 'Bridge' });
-
-    adapter.run({ runId: 'r1', prompt: 'hi', cwd: '/tmp' });
-
-    const stdin = await readAll(child.stdin);
-    expect(stdin).toBe(
-      prefixBridgeSystemPrompt('hi', { openId: 'ou_bot_self', name: 'Bridge' }),
-    );
-  });
-
-  it('falls back to the base system prompt when no identity was set', async () => {
-    const child = fakeChild();
-    spawnMock.spawnProcess.mockReturnValue(child);
-    const adapter = codexAdapter();
-
-    adapter.run({ runId: 'r1', prompt: 'hi', cwd: '/tmp' });
-
-    const stdin = await readAll(child.stdin);
-    expect(stdin).toBe(prefixBridgeSystemPrompt('hi', undefined));
-  });
 });
 
 async function readAll(stream: PassThrough): Promise<string> {

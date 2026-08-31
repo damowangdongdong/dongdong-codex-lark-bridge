@@ -12,6 +12,7 @@ export interface ToolEntry {
 
 export type Block =
   | { kind: 'text'; content: string; streaming: boolean }
+  | { kind: 'user'; content: string }
   | { kind: 'tool'; tool: ToolEntry };
 
 export type FooterStatus = 'thinking' | 'tool_running' | 'streaming' | null;
@@ -27,6 +28,13 @@ export interface RunState {
   /** Set when terminal === 'idle_timeout' — how long claude was idle before
    * the watchdog gave up (so the message can say "N 分钟无响应"). */
   idleTimeoutMinutes?: number;
+  session?: { sessionId?: string; threadId?: string; cwd?: string; model?: string };
+  usage?: {
+    inputTokens?: number;
+    outputTokens?: number;
+    cachedInputTokens?: number;
+    reasoningOutputTokens?: number;
+  };
 }
 
 export const initialState: RunState = {
@@ -44,6 +52,31 @@ function closeStreamingText(blocks: Block[]): Block[] {
 
 export function reduce(state: RunState, evt: AgentEvent): RunState {
   switch (evt.type) {
+    case 'system':
+      return {
+        ...state,
+        session: {
+          ...(evt.sessionId ? { sessionId: evt.sessionId } : {}),
+          ...(evt.threadId ? { threadId: evt.threadId } : {}),
+          ...(evt.cwd ? { cwd: evt.cwd } : {}),
+          ...(evt.model ? { model: evt.model } : {}),
+        },
+      };
+    case 'user_text':
+      return {
+        ...state,
+        blocks: [...closeStreamingText(state.blocks), { kind: 'user', content: evt.content }],
+      };
+    case 'usage':
+      return {
+        ...state,
+        usage: {
+          inputTokens: evt.inputTokens,
+          outputTokens: evt.outputTokens,
+          cachedInputTokens: evt.cachedInputTokens,
+          reasoningOutputTokens: evt.reasoningOutputTokens,
+        },
+      };
     case 'text': {
       const last = state.blocks[state.blocks.length - 1];
       if (last && last.kind === 'text' && last.streaming) {
@@ -102,6 +135,20 @@ export function reduce(state: RunState, evt: AgentEvent): RunState {
         };
       });
       return { ...state, blocks };
+    }
+
+    case 'tool_progress': {
+      const blocks = state.blocks.map((b) => {
+        if (b.kind !== 'tool' || b.tool.id !== evt.id) return b;
+        return {
+          ...b,
+          tool: {
+            ...b.tool,
+            output: `${b.tool.output ?? ''}${evt.delta}`,
+          },
+        };
+      });
+      return { ...state, blocks, footer: 'tool_running' };
     }
 
     case 'error': {

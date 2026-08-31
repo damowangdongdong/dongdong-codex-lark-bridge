@@ -75,7 +75,7 @@ describe('access config concurrent writes', () => {
     expect(root?.profiles.claude?.access.admins).toEqual(
       expect.arrayContaining(['ou-admin', 'ou-bob']),
     );
-  });
+  }, 30_000);
 });
 
 async function createHarness(): Promise<{

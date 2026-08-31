@@ -1,9 +1,6 @@
-import { createInterface } from 'node:readline';
-import type { Readable, Writable } from 'node:stream';
 import { join } from 'node:path';
 import type { SandboxMode } from '../../config/profile-schema';
 import { log } from '../../core/logger';
-import { mergeProcessEnv, spawnProcess, type SpawnedProcessByStdio } from '../../platform/spawn';
 import { SpawnFailed } from '../../runtime/errors';
 import { prefixBridgeSystemPrompt } from '../bridge-system-prompt';
 import { buildLarkChannelEnv, type LarkChannelEnvContext } from '../lark-channel-env';
@@ -12,11 +9,13 @@ import type {
   AgentAdapter,
   AgentBotIdentity,
   AgentEvent,
+  AgentExternalRun,
+  AgentRemoteThreadBinding,
   AgentRun,
   AgentRunOptions,
 } from '../types';
-import { buildCodexArgs } from './argv';
-import { CodexJsonlTranslator, type CodexFinishReason } from './jsonl';
+import { CodexAppServerClient, type RpcNotification } from './app-server-client';
+import { CodexAppServerEventTranslator } from './app-server-events';
 
 export interface CodexAdapterOptions {
   binary: string;
@@ -26,37 +25,25 @@ export interface CodexAdapterOptions {
   ignoreUserConfig?: boolean;
   ignoreRules?: boolean;
   sandbox?: SandboxMode;
+  profile?: string;
   stopGraceMs?: number;
   larkChannel?: LarkChannelEnvContext;
 }
-
-type CodexChild = SpawnedProcessByStdio<Writable, Readable, Readable>;
 
 export class CodexAdapter implements AgentAdapter {
   readonly id = 'codex';
   readonly displayName = 'Codex CLI';
 
-  private readonly binary: string;
-  private readonly profileStateDir: string;
-  private readonly codexHome: string | undefined;
-  private readonly inheritCodexHome: boolean;
-  private readonly ignoreUserConfig: boolean;
-  private readonly ignoreRules: boolean;
-  private readonly sandbox: SandboxMode;
-  private readonly defaultStopGraceMs: number;
-  private readonly larkChannel: LarkChannelEnvContext | undefined;
+  private readonly options: CodexAdapterOptions;
+  private readonly clients = new Map<string, CodexAppServerClient>();
+  private readonly remoteBindings = new Map<string, AgentRemoteThreadBinding>();
+  private readonly bridgeActiveThreads = new Set<string>();
+  private readonly externalRuns = new Map<string, CodexExternalRun>();
+  private readonly externalRunListeners = new Set<(run: AgentExternalRun) => void>();
   private botIdentity: AgentBotIdentity | undefined;
 
-  constructor(opts: CodexAdapterOptions) {
-    this.binary = opts.binary;
-    this.profileStateDir = opts.profileStateDir;
-    this.codexHome = opts.codexHome;
-    this.inheritCodexHome = opts.inheritCodexHome !== false;
-    this.ignoreUserConfig = opts.ignoreUserConfig === true;
-    this.ignoreRules = opts.ignoreRules !== false;
-    this.sandbox = opts.sandbox ?? 'danger-full-access';
-    this.defaultStopGraceMs = opts.stopGraceMs ?? 5000;
-    this.larkChannel = opts.larkChannel;
+  constructor(options: CodexAdapterOptions) {
+    this.options = options;
   }
 
   setBotIdentity(identity: AgentBotIdentity): void {
@@ -71,12 +58,12 @@ export class CodexAdapter implements AgentAdapter {
     return checkAgentAvailability({
       agentId: 'codex',
       agentName: 'Codex CLI',
-      command: this.binary,
-      binaryPath: this.binary,
+      command: this.options.binary,
+      binaryPath: this.options.binary,
     });
   }
 
-  async prepareRun(): Promise<void> {
+  async prepareRun(options?: AgentRunOptions): Promise<void> {
     const availability = await this.checkAvailability();
     if (!availability.ok) {
       throw new SpawnFailed(
@@ -86,210 +73,476 @@ export class CodexAdapter implements AgentAdapter {
         availability.diagnostic,
       );
     }
+    try {
+      if (options) await this.clientFor(options.profile).start();
+    } catch (err) {
+      throw new SpawnFailed('codex app-server failed to start', err, 'agent-prepare-failed');
+    }
   }
 
-  run(opts: AgentRunOptions): AgentRun {
-    if (!opts.cwd) {
-      throw new Error('cwd is required for CodexAdapter.run');
-    }
-
-    const args = buildCodexArgs({
-      cwd: opts.cwd,
-      sandbox: opts.sandbox ?? this.sandbox,
-      threadId: opts.threadId,
-      images: opts.images,
-      ignoreUserConfig: this.ignoreUserConfig,
-      ignoreRules: this.ignoreRules,
-      model: opts.model,
-    });
-    const envOverrides: NodeJS.ProcessEnv = buildLarkChannelEnv(this.larkChannel);
-    if (this.codexHome) {
-      envOverrides.CODEX_HOME = this.codexHome;
-    } else if (!this.inheritCodexHome) {
-      envOverrides.CODEX_HOME = join(this.profileStateDir, 'codex-home');
-    }
-    const child = spawnProcess(this.binary, args, {
-      cwd: opts.cwd,
-      env: mergeProcessEnv(process.env, envOverrides),
-      stdio: ['pipe', 'pipe', 'pipe'],
-    }) as CodexChild;
-
-    log.info('agent', 'spawn', {
-      pid: child.pid ?? null,
-      cwd: opts.cwd,
-      hasThread: Boolean(opts.threadId),
-      promptChars: opts.prompt.length,
-      images: opts.images?.length ?? 0,
-      model: opts.model,
-    });
-
-    const stderrChunks: Buffer[] = [];
-    let runtimeError: Error | null = null;
-    let stderrBuffer = '';
-    child.stderr.on('data', (chunk: Buffer) => {
-      stderrChunks.push(chunk);
-      stderrBuffer += chunk.toString('utf8');
-      let nl = stderrBuffer.indexOf('\n');
-      while (nl !== -1) {
-        const line = stderrBuffer.slice(0, nl);
-        stderrBuffer = stderrBuffer.slice(nl + 1);
-        if (line.trim()) log.warn('agent', 'stderr', { line });
-        if (isWindowsCommandNotFoundLine(line)) {
-          runtimeError = new Error(`failed to spawn codex: ${line.trim()}`);
-          child.stdout.destroy();
-          child.kill();
-        }
-        nl = stderrBuffer.indexOf('\n');
-      }
-    });
-
-    let stopReason: CodexFinishReason | undefined;
-    child.on('error', (err) => {
-      runtimeError = err;
-    });
-    child.on('exit', (code, signal) => {
-      log.info('agent', 'exit', { pid: child.pid ?? null, code, signal });
-    });
-    child.stdin.on('error', (err) => {
-      log.warn('agent', 'stdin-error', { message: err.message });
-    });
-    child.stdin.end(prefixBridgeSystemPrompt(opts.prompt, this.botIdentity), 'utf8');
-
-    const stopGraceMs = opts.stopGraceMs ?? this.defaultStopGraceMs;
-
-    return {
-      runId: opts.runId,
-      events: createEventStream(child, stderrChunks, () => runtimeError, () => stopReason),
-      async stop() {
-        if (child.exitCode !== null || child.signalCode !== null) return;
-        stopReason = 'interrupted';
-        log.info('agent', 'stop-sigterm', { pid: child.pid ?? null, graceMs: stopGraceMs });
-        child.kill('SIGTERM');
-        await new Promise<void>((resolve) => {
-          const timer = setTimeout(() => {
-            if (child.exitCode === null && child.signalCode === null) {
-              log.warn('agent', 'stop-sigkill', {
-                pid: child.pid ?? null,
-                graceMs: stopGraceMs,
-                reason: 'grace-period-expired',
-              });
-              child.kill('SIGKILL');
-            }
-            resolve();
-          }, stopGraceMs);
-          child.once('exit', () => {
-            clearTimeout(timer);
-            resolve();
-          });
-        });
+  run(options: AgentRunOptions): AgentRun {
+    if (!options.cwd) throw new Error('cwd is required for CodexAdapter.run');
+    const profile = options.profile ?? this.options.profile;
+    const client = this.clientFor(profile);
+    return new CodexAppServerRun({
+      client,
+      options: {
+        ...options,
+        cwd: options.cwd,
+        sandbox: options.sandbox ?? this.options.sandbox ?? 'danger-full-access',
+        profile,
       },
-      waitForExit(timeoutMs: number): Promise<boolean> {
-        if (child.exitCode !== null || child.signalCode !== null) {
-          return Promise.resolve(true);
-        }
-        return new Promise<boolean>((resolve) => {
-          const onExit = (): void => {
-            clearTimeout(timer);
-            resolve(true);
-          };
-          const timer = setTimeout(() => {
-            child.removeListener('exit', onExit);
-            resolve(false);
-          }, timeoutMs);
-          child.once('exit', onExit);
-        });
+      botIdentity: this.botIdentity,
+      setBridgeThreadActive: (selectedProfile, threadId, active) => {
+        this.setBridgeThreadActive(selectedProfile, threadId, active);
       },
-    };
+    });
+  }
+
+  async close(): Promise<void> {
+    const clients = [...this.clients.values()];
+    this.clients.clear();
+    await Promise.allSettled(clients.map((client) => client.close()));
+  }
+
+  async appServerRequest(
+    profile: string | undefined,
+    method: string,
+    params?: unknown,
+  ): Promise<unknown> {
+    return this.clientFor(profile).request(method, params);
+  }
+
+  async appServerEndpoint(profile?: string): Promise<string> {
+    const client = this.clientFor(profile);
+    await client.start();
+    if (!client.endpoint) throw new Error('Codex app-server returned no endpoint');
+    return client.endpoint;
+  }
+
+  bindRemoteThread(binding: AgentRemoteThreadBinding): void {
+    this.remoteBindings.set(remoteThreadKey(binding.profile, binding.threadId), { ...binding });
+  }
+
+  onExternalRun(listener: (run: AgentExternalRun) => void): () => void {
+    this.externalRunListeners.add(listener);
+    return () => this.externalRunListeners.delete(listener);
+  }
+
+  private clientFor(profile: string | undefined): CodexAppServerClient {
+    const selected = profile ?? this.options.profile;
+    const key = selected ?? '';
+    const existing = this.clients.get(key);
+    if (existing) return existing;
+    const client = new CodexAppServerClient({
+      binary: this.options.binary,
+      profileStateDir: join(
+        this.options.profileStateDir,
+        'codex-app-server',
+        selected ? safeSegment(selected) : 'default',
+      ),
+      codexHome: this.options.codexHome,
+      inheritCodexHome: this.options.inheritCodexHome,
+      ignoreUserConfig: this.options.ignoreUserConfig,
+      ignoreRules: this.options.ignoreRules,
+      profile: selected,
+      env: buildLarkChannelEnv(this.options.larkChannel),
+    });
+    client.onNotification((notification) => {
+      this.handleAdapterNotification(selected, client, notification);
+    });
+    this.clients.set(key, client);
+    return client;
+  }
+
+  private handleAdapterNotification(
+    profile: string | undefined,
+    client: CodexAppServerClient,
+    notification: RpcNotification,
+  ): void {
+    if (notification.method !== 'turn/started') return;
+    const params = recordValue(notification.params);
+    const threadId = stringValue(params?.threadId);
+    const turnId = stringValue(recordValue(params?.turn)?.id) ?? stringValue(params?.turnId);
+    if (!threadId || !turnId) return;
+    const threadKey = remoteThreadKey(profile, threadId);
+    if (this.bridgeActiveThreads.has(threadKey)) return;
+    const binding = this.remoteBindings.get(threadKey);
+    if (!binding) return;
+    const externalKey = `${threadKey}\u001f${turnId}`;
+    if (this.externalRuns.has(externalKey)) return;
+    const run = new CodexExternalRun({
+      client,
+      binding,
+      turnId,
+      onFinish: () => this.externalRuns.delete(externalKey),
+    });
+    this.externalRuns.set(externalKey, run);
+    for (const listener of this.externalRunListeners) listener({ binding: { ...binding }, run });
+  }
+
+  private setBridgeThreadActive(profile: string | undefined, threadId: string, active: boolean): void {
+    const key = remoteThreadKey(profile, threadId);
+    if (active) this.bridgeActiveThreads.add(key);
+    else this.bridgeActiveThreads.delete(key);
   }
 }
 
-async function* createEventStream(
-  child: CodexChild,
-  stderrChunks: Buffer[],
-  getError: () => Error | null,
-  getStopReason: () => CodexFinishReason | undefined,
-): AsyncGenerator<AgentEvent> {
-  const translator = new CodexJsonlTranslator();
-  if (!child.pid) {
-    const err = getError();
-    yield {
-      type: 'error',
-      message: err ? `failed to spawn codex: ${err.message}` : 'spawn returned no pid',
-      terminationReason: 'failed',
-    };
-    return;
+interface CodexAppServerRunInput {
+  client: CodexAppServerClient;
+  options: AgentRunOptions & { cwd: string; sandbox: SandboxMode };
+  botIdentity?: AgentBotIdentity;
+  setBridgeThreadActive(profile: string | undefined, threadId: string, active: boolean): void;
+}
+
+class CodexAppServerRun implements AgentRun {
+  readonly runId: string;
+  readonly events: AsyncIterable<AgentEvent>;
+
+  private readonly client: CodexAppServerClient;
+  private readonly options: CodexAppServerRunInput['options'];
+  private readonly botIdentity: AgentBotIdentity | undefined;
+  private readonly setBridgeThreadActive: CodexAppServerRunInput['setBridgeThreadActive'];
+  private readonly queue = new AsyncEventQueue<AgentEvent>();
+  private readonly exited: Promise<void>;
+  private resolveExited!: () => void;
+  private unsubscribe: (() => void) | undefined;
+  private unsubscribeDisconnect: (() => void) | undefined;
+  private translator: CodexAppServerEventTranslator | undefined;
+  private threadId: string | undefined;
+  private turnId: string | undefined;
+  private stopRequested = false;
+  private terminal = false;
+  private bridgeThreadMarked = false;
+
+  constructor(input: CodexAppServerRunInput) {
+    this.client = input.client;
+    this.options = input.options;
+    this.botIdentity = input.botIdentity;
+    this.setBridgeThreadActive = input.setBridgeThreadActive;
+    this.runId = input.options.runId;
+    this.events = this.queue;
+    this.exited = new Promise<void>((resolve) => {
+      this.resolveExited = resolve;
+    });
+    this.unsubscribe = this.client.onNotification((notification) => {
+      this.handleNotification(notification);
+    });
+    this.unsubscribeDisconnect = this.client.onDisconnect((error) => {
+      this.handleDisconnect(error);
+    });
+    void this.start();
   }
 
-  const rl = createInterface({ input: child.stdout, crlfDelay: Infinity });
-  let sawStdout = false;
-  let silentExitTimer: ReturnType<typeof setTimeout> | undefined;
-  const closeSilentStdout = (): void => {
-    silentExitTimer = setTimeout(() => {
-      if (!sawStdout && !child.stdout.readableEnded) child.stdout.destroy();
-    }, 50);
+  async steer(prompt: string, images: readonly string[] = []): Promise<void> {
+    if (!this.threadId || !this.turnId || this.terminal) {
+      throw new Error('Codex turn is not active');
+    }
+    await this.client.request('turn/steer', {
+      threadId: this.threadId,
+      expectedTurnId: this.turnId,
+      input: userInput(prompt, images),
+    });
+  }
+
+  remoteSession(): { endpoint: string; threadId?: string; profile?: string } {
+    return {
+      endpoint: this.client.endpoint ?? '',
+      ...(this.threadId ? { threadId: this.threadId } : {}),
+      ...(this.options.profile ? { profile: this.options.profile } : {}),
+    };
+  }
+
+  async stop(): Promise<void> {
+    if (this.terminal) return;
+    this.stopRequested = true;
+    if (this.threadId && this.turnId) {
+      await this.client
+        .request('turn/interrupt', { threadId: this.threadId, turnId: this.turnId })
+        .catch((err) => log.warn('codex-app-server', 'interrupt-failed', { message: String(err) }));
+    }
+  }
+
+  async waitForExit(timeoutMs: number): Promise<boolean> {
+    if (this.terminal) return true;
+    return Promise.race([
+      this.exited.then(() => true),
+      new Promise<false>((resolve) => setTimeout(() => resolve(false), timeoutMs)),
+    ]);
+  }
+
+  private async start(): Promise<void> {
+    try {
+      await this.client.start();
+      const threadResponse = this.options.threadId
+        ? await this.client.request('thread/resume', this.threadParams(this.options.threadId))
+        : await this.client.request('thread/start', this.threadParams());
+      const response = recordValue(threadResponse);
+      const thread = recordValue(response?.thread);
+      const threadId = stringValue(thread?.id);
+      if (!threadId) throw new Error('Codex app-server returned no thread id');
+      this.threadId = threadId;
+      this.translator = new CodexAppServerEventTranslator(threadId);
+      this.queue.push({
+        type: 'system',
+        threadId,
+        cwd: stringValue(response?.cwd) ?? this.options.cwd,
+        model: stringValue(response?.model) ?? this.options.model,
+      });
+
+      if (this.stopRequested) {
+        this.finish(this.translator.interrupt());
+        return;
+      }
+      this.setBridgeThreadActive(this.options.profile, threadId, true);
+      this.bridgeThreadMarked = true;
+      const turnResponse = await this.client.request('turn/start', {
+        threadId,
+        input: userInput(
+          prefixBridgeSystemPrompt(this.options.prompt, this.botIdentity),
+          this.options.images,
+        ),
+        cwd: this.options.cwd,
+        approvalPolicy: 'never',
+        sandboxPolicy: sandboxPolicy(this.options.sandbox, this.options.cwd),
+        ...(this.options.model ? { model: this.options.model } : {}),
+        ...(this.options.personality ? { personality: this.options.personality } : {}),
+      });
+      const turnId = stringValue(recordValue(recordValue(turnResponse)?.turn)?.id);
+      if (!turnId) throw new Error('Codex app-server returned no turn id');
+      this.turnId = turnId;
+      this.translator.setTurnId(turnId);
+      log.info('agent', 'app-server-turn-started', {
+        runId: this.runId,
+        threadId,
+        turnId,
+        cwd: this.options.cwd,
+        profile: this.options.profile ?? 'default',
+      });
+      if (this.stopRequested) await this.stop();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.finish(
+        this.translator?.fail(`Codex app-server run failed: ${message}`) ?? [
+          {
+            type: 'error',
+            message: `Codex app-server run failed: ${message}`,
+            terminationReason: 'failed',
+          },
+        ],
+      );
+    }
+  }
+
+  private threadParams(threadId?: string): Record<string, unknown> {
+    return {
+      ...(threadId ? { threadId } : {}),
+      cwd: this.options.cwd,
+      approvalPolicy: 'never',
+      sandbox: this.options.sandbox,
+      ...(this.options.model ? { model: this.options.model } : {}),
+      ...(this.options.personality ? { personality: this.options.personality } : {}),
+    };
+  }
+
+  private handleNotification(notification: RpcNotification): void {
+    const translated = this.translator?.translate(notification) ?? [];
+    if (translated.length === 0) return;
+    const terminal = translated.some((event) => event.type === 'done' || event.type === 'error');
+    if (terminal) {
+      this.finish(translated);
+    } else {
+      for (const event of translated) this.queue.push(event);
+    }
+  }
+
+  private handleDisconnect(error: Error): void {
+    const message = `Codex app-server disconnected: ${error.message}`;
+    this.finish(this.translator?.fail(message) ?? [{
+      type: 'error',
+      message,
+      terminationReason: 'failed',
+    }]);
+  }
+
+  private finish(events: AgentEvent[]): void {
+    if (this.terminal) return;
+    this.terminal = true;
+    for (const event of events) this.queue.push(event);
+    this.queue.end();
+    this.unsubscribe?.();
+    this.unsubscribe = undefined;
+    this.unsubscribeDisconnect?.();
+    this.unsubscribeDisconnect = undefined;
+    if (this.bridgeThreadMarked && this.threadId) {
+      this.setBridgeThreadActive(this.options.profile, this.threadId, false);
+      this.bridgeThreadMarked = false;
+    }
+    this.resolveExited();
+  }
+}
+
+interface CodexExternalRunInput {
+  client: CodexAppServerClient;
+  binding: AgentRemoteThreadBinding;
+  turnId: string;
+  onFinish(): void;
+}
+
+class CodexExternalRun implements AgentRun {
+  readonly runId: string;
+  readonly events: AsyncIterable<AgentEvent>;
+  private readonly client: CodexAppServerClient;
+  private readonly binding: AgentRemoteThreadBinding;
+  private readonly turnId: string;
+  private readonly translator: CodexAppServerEventTranslator;
+  private readonly queue = new AsyncEventQueue<AgentEvent>();
+  private readonly exited: Promise<void>;
+  private readonly onFinish: () => void;
+  private resolveExited!: () => void;
+  private unsubscribe: (() => void) | undefined;
+  private unsubscribeDisconnect: (() => void) | undefined;
+  private terminal = false;
+
+  constructor(input: CodexExternalRunInput) {
+    this.client = input.client;
+    this.binding = input.binding;
+    this.turnId = input.turnId;
+    this.onFinish = input.onFinish;
+    this.runId = `codex-remote:${input.turnId}`;
+    this.events = this.queue;
+    this.translator = new CodexAppServerEventTranslator(input.binding.threadId);
+    this.translator.setTurnId(input.turnId);
+    this.exited = new Promise<void>((resolve) => {
+      this.resolveExited = resolve;
+    });
+    this.queue.push({
+      type: 'system',
+      threadId: input.binding.threadId,
+      cwd: input.binding.cwd,
+    });
+    this.unsubscribe = this.client.onNotification((notification) => {
+      const events = this.translator.translate(notification);
+      if (!events.length) return;
+      if (events.some((event) => event.type === 'done' || event.type === 'error')) {
+        this.finish(events);
+      } else {
+        for (const event of events) this.queue.push(event);
+      }
+    });
+    this.unsubscribeDisconnect = this.client.onDisconnect((error) => {
+      this.finish(this.translator.fail(`Codex app-server disconnected: ${error.message}`));
+    });
+  }
+
+  async steer(prompt: string, images: readonly string[] = []): Promise<void> {
+    if (this.terminal) throw new Error('Codex turn is not active');
+    await this.client.request('turn/steer', {
+      threadId: this.binding.threadId,
+      expectedTurnId: this.turnId,
+      input: userInput(prompt, images),
+    });
+  }
+
+  remoteSession(): { endpoint: string; threadId?: string; profile?: string } {
+    return {
+      endpoint: this.client.endpoint ?? '',
+      threadId: this.binding.threadId,
+      ...(this.binding.profile ? { profile: this.binding.profile } : {}),
+    };
+  }
+
+  async stop(): Promise<void> {
+    if (this.terminal) return;
+    await this.client.request('turn/interrupt', {
+      threadId: this.binding.threadId,
+      turnId: this.turnId,
+    });
+  }
+
+  async waitForExit(timeoutMs: number): Promise<boolean> {
+    if (this.terminal) return true;
+    return Promise.race([
+      this.exited.then(() => true),
+      new Promise<false>((resolve) => setTimeout(() => resolve(false), timeoutMs)),
+    ]);
+  }
+
+  private finish(events: AgentEvent[]): void {
+    if (this.terminal) return;
+    this.terminal = true;
+    for (const event of events) this.queue.push(event);
+    this.queue.end();
+    this.unsubscribe?.();
+    this.unsubscribe = undefined;
+    this.unsubscribeDisconnect?.();
+    this.unsubscribeDisconnect = undefined;
+    this.onFinish();
+    this.resolveExited();
+  }
+}
+
+function userInput(prompt: string, images: readonly string[] = []): unknown[] {
+  return [
+    { type: 'text', text: prompt, text_elements: [] },
+    ...images.map((path) => ({ type: 'localImage', path })),
+  ];
+}
+
+function sandboxPolicy(mode: SandboxMode, cwd: string): Record<string, unknown> {
+  if (mode === 'danger-full-access') return { type: 'dangerFullAccess' };
+  if (mode === 'read-only') return { type: 'readOnly', networkAccess: false };
+  return {
+    type: 'workspaceWrite',
+    writableRoots: [cwd],
+    networkAccess: false,
+    excludeTmpdirEnvVar: false,
+    excludeSlashTmp: false,
   };
-  child.once('exit', closeSilentStdout);
-  try {
-    for await (const line of rl) {
-      sawStdout = true;
-      const trimmed = line.trim();
-      if (!trimmed) continue;
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(trimmed);
-      } catch {
+}
+
+function safeSegment(value: string): string {
+  return value.replace(/[^A-Za-z0-9_.-]+/g, '-').slice(0, 64) || 'default';
+}
+
+function remoteThreadKey(profile: string | undefined, threadId: string): string {
+  return `${profile ?? ''}\u001f${threadId}`;
+}
+
+function recordValue(value: unknown): Record<string, unknown> | undefined {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function stringValue(value: unknown): string | undefined {
+  return typeof value === 'string' ? value : undefined;
+}
+
+class AsyncEventQueue<T> implements AsyncIterable<T> {
+  private readonly values: T[] = [];
+  private readonly waiters: Array<() => void> = [];
+  private closed = false;
+
+  push(value: T): void {
+    if (this.closed) return;
+    this.values.push(value);
+    this.waiters.shift()?.();
+  }
+
+  end(): void {
+    this.closed = true;
+    for (const wake of this.waiters.splice(0)) wake();
+  }
+
+  async *[Symbol.asyncIterator](): AsyncIterator<T> {
+    while (!this.closed || this.values.length > 0) {
+      const value = this.values.shift();
+      if (value !== undefined) {
+        yield value;
         continue;
       }
-      yield* translator.translate(parsed);
+      await new Promise<void>((resolve) => this.waiters.push(resolve));
     }
-  } finally {
-    if (silentExitTimer) clearTimeout(silentExitTimer);
-    child.removeListener('exit', closeSilentStdout);
-    rl.close();
   }
-
-  const earlyRuntimeError = getError();
-  if (earlyRuntimeError && child.exitCode === null && child.signalCode === null) {
-    yield* translator.fail(`codex runtime error: ${earlyRuntimeError.message}`);
-    return;
-  }
-
-  const exitCode = await waitForExitCode(child);
-  const stopReason = getStopReason();
-  if (stopReason) {
-    yield* translator.finish(stopReason);
-    return;
-  }
-
-  const runtimeError = getError();
-  if (exitCode !== 0 && exitCode !== null) {
-    if (!translator.terminalEmitted()) {
-      const stderr = Buffer.concat(stderrChunks).toString('utf8').trim();
-      const detail = stderr ? `: ${stderr.slice(0, 500)}` : '';
-      yield* translator.fail(`codex exited with code ${exitCode}${detail}`);
-    }
-    return;
-  }
-  if (runtimeError && !translator.terminalEmitted()) {
-    yield* translator.fail(`codex runtime error: ${runtimeError.message}`);
-    return;
-  }
-
-  yield* translator.finish();
-}
-
-async function waitForExitCode(child: CodexChild): Promise<number | null> {
-  if (child.exitCode !== null || child.signalCode !== null) {
-    return child.exitCode;
-  }
-  return new Promise<number | null>((resolve) => {
-    child.once('exit', (code) => resolve(code));
-  });
-}
-
-function isWindowsCommandNotFoundLine(line: string): boolean {
-  return (
-    process.platform === 'win32' &&
-    /is not recognized as an internal or external command|operable program or batch file/i.test(line)
-  );
 }

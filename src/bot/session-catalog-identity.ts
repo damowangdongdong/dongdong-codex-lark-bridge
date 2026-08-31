@@ -42,6 +42,14 @@ export async function commandSessionCatalogIdentity(input: {
     now: Date.now(),
     codexHome: input.controls.profileConfig.codex?.codexHome,
     inheritCodexHome: input.controls.profileConfig.codex?.inheritCodexHome,
+    codexProfile: input.workspaces.codexProfileFor(
+      input.scope,
+      input.controls.profileConfig.codex?.profile,
+    ),
+    codexSandbox:
+      capability.agentId === 'codex'
+        ? input.workspaces.codexSandboxFor(input.scope)
+        : undefined,
   });
   if (!policy.ok) return undefined;
   return {
