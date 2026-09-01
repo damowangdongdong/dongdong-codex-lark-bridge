@@ -535,7 +535,7 @@ async function handleAttach(_args: string, ctx: CommandContext): Promise<void> {
     [
       '在本机终端运行以下命令，即可附着到与飞书相同的 Codex thread：',
       '',
-      `\`${shellCommand(['codex', '--remote', remote.endpoint, 'resume', remote.threadId])}\``,
+      `\`${codexAttachCommand(remote.endpoint, remote.threadId, remote.profile)}\``,
       '',
       '附着后，终端与飞书共享同一个 app-server 和 thread。',
     ].join('\n'),
@@ -1026,7 +1026,7 @@ async function replyWithAttachHint(ctx: CommandContext, reason: string): Promise
   }
   await reply(
     ctx,
-    `${reason}。请在附着终端中执行：\n\n\`${shellCommand(['codex', '--remote', remote.endpoint, 'resume', remote.threadId])}\``,
+    `${reason}。请在附着终端中执行：\n\n\`${codexAttachCommand(remote.endpoint, remote.threadId, remote.profile)}\``,
   );
 }
 
@@ -1072,6 +1072,13 @@ function resultData(result: unknown): unknown[] {
 
 function shellCommand(args: string[]): string {
   return args.map((arg) => /^[A-Za-z0-9_./:@-]+$/.test(arg) ? arg : `'${arg.replace(/'/g, `'"'"'`)}'`).join(' ');
+}
+
+function codexAttachCommand(endpoint: string, threadId: string, profile?: string): string {
+  const args = ['codex'];
+  if (profile) args.push('--profile', profile);
+  args.push('--remote', endpoint, 'resume', threadId);
+  return shellCommand(args);
 }
 
 function recordValue(value: unknown): Record<string, unknown> | undefined {

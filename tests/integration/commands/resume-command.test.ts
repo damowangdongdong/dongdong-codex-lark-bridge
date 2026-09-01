@@ -729,6 +729,32 @@ describe('agent-aware resume commands', () => {
     );
   });
 
+  it('includes the selected profile in attach and attached-TUI commands', async () => {
+    const h = await createHarness('codex');
+    h.workspaces.setCodexLaunch('chat-1', 'freerouter', 'resume');
+    const activeRun = Object.assign(
+      h.agent.run({ runId: 'run-active', prompt: 'running' }),
+      {
+        remoteSession: () => ({
+          endpoint: h.agent.appServerEndpointValue,
+          threadId: 'thread-current',
+          profile: 'freerouter',
+        }),
+      },
+    );
+    h.activeRuns.register('chat-1', activeRun);
+
+    await expect(h.run('/attach')).resolves.toBe(true);
+    expect(lastMarkdown(h.channel)).toContain(
+      'codex --profile freerouter --remote unix:///tmp/fake-codex.sock resume thread-current',
+    );
+
+    await expect(h.run('/theme')).resolves.toBe(true);
+    expect(lastMarkdown(h.channel)).toContain(
+      'codex --profile freerouter --remote unix:///tmp/fake-codex.sock resume thread-current',
+    );
+  });
+
   it('maps remote-semantic Codex slash commands to app-server and persists local turn settings', async () => {
     const h = await createHarness('codex');
     h.catalog.upsertActive({ ...h.identity, threadId: 'thread-current', now: 1000 });
