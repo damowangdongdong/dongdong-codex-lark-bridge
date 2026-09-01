@@ -55,7 +55,11 @@ interface Harness {
   dispatchLaunch(
     profile: string,
     mode: 'new' | 'resume',
-    options?: { chatId?: string; chatMode?: 'p2p' | 'group' | 'topic' },
+    options?: {
+      chatId?: string;
+      chatMode?: 'p2p' | 'group' | 'topic';
+      projectChatName?: string;
+    },
   ): Promise<void>;
 }
 
@@ -516,6 +520,8 @@ describe('agent-aware resume commands', () => {
     expect(card).toContain('选择 Codex 启动方式');
     expect(card).toContain('freerouter');
     expect(card).toContain('默认配置（不传 --profile）');
+    expect(card).toContain('项目群名称（仅首次创建时生效）');
+    expect(card).toContain('Codex 项目群｜next-workspace');
     expect(h.workspaces.codexLaunchPendingFor('chat-1')).toBe(true);
     expect(h.workspaces.selectionFor('chat-1')?.launchMode).toBeUndefined();
     expect(h.controls.profileConfig.codex?.profile).toBe('freerouter');
@@ -528,7 +534,7 @@ describe('agent-aware resume commands', () => {
     expect(h.workspaces.selectionFor('chat-1')).toBeUndefined();
     expect(h.workspaces.projectChatFor(await realpath(target))).toEqual({
       chatId: 'oc_project_1',
-      name: 'Codex CLI · next-workspace',
+      name: 'Codex 项目群｜next-workspace',
     });
     expect(h.workspaces.selectionFor('oc_project_1')).toMatchObject({
       cwd: await realpath(target),
@@ -555,18 +561,35 @@ describe('agent-aware resume commands', () => {
     expect(status).not.toContain('**launch**');
   });
 
+  it('uses an edited project-group name when creating the group', async () => {
+    const h = await createHarness('codex');
+
+    await expect(h.run(`/cd ${h.tmp.workspace}`)).resolves.toBe(true);
+    await h.dispatchLaunch('freerouter', 'new', { projectChatName: '桥接器研发项目群' });
+
+    expect(h.projectChats.createCalls).toBe(1);
+    expect(h.workspaces.projectChatFor(await realpath(h.tmp.workspace))).toEqual({
+      chatId: 'oc_project_1',
+      name: '桥接器研发项目群',
+    });
+  });
+
   it('对同一路径复用仍存在的项目群，群已删除时才重建', async () => {
     const h = await createHarness('codex');
 
     await expect(h.run(`/cd ${h.tmp.workspace}`)).resolves.toBe(true);
     await h.dispatchLaunch('freerouter', 'new');
     expect(h.projectChats.createCalls).toBe(1);
+    expect(h.workspaces.projectChatFor(await realpath(h.tmp.workspace))?.name)
+      .toBe('Codex 项目群｜workspace');
     expect(h.workspaces.projectChatFor(await realpath(h.tmp.workspace))?.chatId)
       .toBe('oc_project_1');
 
     await expect(h.run(`/cd ${h.tmp.workspace}`)).resolves.toBe(true);
-    await h.dispatchLaunch('freerouter', 'new');
+    await h.dispatchLaunch('freerouter', 'new', { projectChatName: '不应覆盖已有群名' });
     expect(h.projectChats.createCalls).toBe(1);
+    expect(h.workspaces.projectChatFor(await realpath(h.tmp.workspace))?.name)
+      .toBe('Codex 项目群｜workspace');
     expect(h.channel.sent.some((entry) =>
       entry.chatId === 'chat-1'
       && JSON.stringify(entry.content).includes('已复用'),
@@ -1028,7 +1051,11 @@ async function createHarness(
   const dispatchLaunch = (
     profile: string,
     mode: 'new' | 'resume',
-    dispatchOptions: { chatId?: string; chatMode?: 'p2p' | 'group' | 'topic' } = {},
+    dispatchOptions: {
+      chatId?: string;
+      chatMode?: 'p2p' | 'group' | 'topic';
+      projectChatName?: string;
+    } = {},
   ): Promise<void> => {
     const chatId = dispatchOptions.chatId ?? 'chat-1';
     cardModes.set(chatId, dispatchOptions.chatMode ?? 'p2p');
@@ -1036,7 +1063,13 @@ async function createHarness(
       channel: channel as unknown as Parameters<typeof handleCardAction>[0]['channel'],
       evt: cardEvent(
         { cmd: 'ws.launch' },
-        { codex_profile: profile, launch_mode: mode },
+        {
+          codex_profile: profile,
+          launch_mode: mode,
+          ...(dispatchOptions.projectChatName
+            ? { project_chat_name: dispatchOptions.projectChatName }
+            : {}),
+        },
         chatId,
       ),
       sessions,

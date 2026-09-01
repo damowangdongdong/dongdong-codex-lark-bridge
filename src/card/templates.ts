@@ -78,6 +78,7 @@ export interface WorkspaceLaunchCardOptions {
   profiles: string[];
   configuredProfile?: string;
   routesToProjectGroup?: boolean;
+  projectChatName?: string;
 }
 
 export function workspaceLaunchCard(options: WorkspaceLaunchCardOptions): object {
@@ -89,7 +90,7 @@ export function workspaceLaunchCard(options: WorkspaceLaunchCardOptions): object
       `已选择工作目录：\`${escapeCode(options.cwd)}\`\n\n` +
       '请选择 Codex CLI profile，以及要创建新会话还是恢复历史会话。' +
       (options.routesToProjectGroup
-        ? '继续后会进入该路径的专属项目群；已有群会直接复用。'
+        ? '继续后会进入该路径的专属项目群；已有群会直接复用且不会重命名。'
         : '此卡片不会自动启动 Codex。'),
     ),
     {
@@ -112,6 +113,21 @@ export function workspaceLaunchCard(options: WorkspaceLaunchCardOptions): object
             })),
           ],
         },
+        ...(options.routesToProjectGroup && options.projectChatName
+          ? [
+              {
+                tag: 'markdown',
+                content: '**项目群名称（仅首次创建时生效）**\n_可直接修改；已有路径群会原样复用。_',
+              },
+              {
+                tag: 'input',
+                name: 'project_chat_name',
+                default_value: options.projectChatName,
+                placeholder: { tag: 'plain_text', content: options.projectChatName },
+                input_type: 'text',
+              },
+            ]
+          : []),
         { tag: 'markdown', content: '**会话方式**' },
         {
           tag: 'select_static',

@@ -1315,6 +1315,7 @@ async function showWorkspaceLaunchCard(
     profiles,
     configuredProfile,
     routesToProjectGroup: ctx.chatMode === 'p2p',
+    ...(ctx.chatMode === 'p2p' ? { projectChatName: projectChatName(ctx, cwd) } : {}),
   });
   await ctx.channel.send(ctx.msg.chatId, { card }, commandReplyOptions(ctx));
   log.info('command', 'workspace-selected-awaiting-codex-launch', {
@@ -1330,6 +1331,7 @@ async function handleWorkspaceLaunch(args: string, ctx: CommandContext): Promise
   const parts = args.trim().split(/\s+/).filter(Boolean);
   const rawProfile = String(ctx.formValue?.codex_profile ?? parts[0] ?? '').trim();
   const rawMode = String(ctx.formValue?.launch_mode ?? parts[1] ?? '').trim();
+  const requestedProjectChatName = String(ctx.formValue?.project_chat_name ?? '').trim() || undefined;
   if (!rawProfile || (rawMode !== 'new' && rawMode !== 'resume')) {
     await reply(ctx, '请在工作目录卡片中选择 Codex profile 和会话方式。');
     return;
@@ -1340,7 +1342,7 @@ async function handleWorkspaceLaunch(args: string, ctx: CommandContext): Promise
     await reply(ctx, '当前工作目录不存在，请重新使用 `/cd <path>`。');
     return;
   }
-  const project = await resolveProjectChat(ctx, cwd);
+  const project = await resolveProjectChat(ctx, cwd, requestedProjectChatName);
   if (!project) return;
 
   let launchCtx = ctx;
@@ -1461,7 +1463,8 @@ function isMissingProjectChatError(err: unknown): boolean {
 }
 
 function projectChatName(ctx: CommandContext, cwd: string): string {
-  return `${ctx.agent.displayName} · ${basename(cwd)}`;
+  const agentName = ctx.agent.id === 'codex' ? 'Codex' : ctx.agent.displayName;
+  return `${agentName} 项目群｜${basename(cwd)}`;
 }
 
 function projectCommandContext(
