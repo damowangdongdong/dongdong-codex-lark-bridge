@@ -8,6 +8,8 @@ export type WorkspaceLaunchMode = 'new' | 'resume';
 
 export interface WorkspaceSelection {
   cwd: string;
+  /** A validated cwd awaiting confirmation in the Codex launch card. */
+  pendingCwd?: string;
   /** `null` means run Codex without `--profile`; undefined is legacy/unselected. */
   codexProfile?: string | null;
   launchMode?: WorkspaceLaunchMode;
@@ -19,13 +21,19 @@ export interface WorkspaceSelection {
   codexPersonality?: 'friendly' | 'pragmatic' | 'none';
 }
 
+export interface ProjectChatBinding {
+  chatId: string;
+  name: string;
+}
+
 interface WorkspaceData {
   chats: Record<string, WorkspaceSelection>;
   named: Record<string, string>;
+  projectChats: Record<string, ProjectChatBinding>;
 }
 
 export class WorkspaceStore {
-  private data: WorkspaceData = { chats: {}, named: {} };
+  private data: WorkspaceData = { chats: {}, named: {}, projectChats: {} };
   private saving: Promise<void> = Promise.resolve();
   private readonly path: string;
 
@@ -40,6 +48,7 @@ export class WorkspaceStore {
       this.data = {
         chats: parsed.chats ?? {},
         named: parsed.named ?? {},
+        projectChats: parsed.projectChats ?? {},
       };
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') return;
@@ -90,10 +99,29 @@ export class WorkspaceStore {
   prepareCodexLaunch(chatId: string, cwd: string): void {
     const previous = this.data.chats[chatId];
     this.data.chats[chatId] = {
-      cwd,
+      cwd: previous?.cwd ?? cwd,
+      pendingCwd: cwd,
       launchPending: true,
+      ...(previous?.codexProfile !== undefined
+        ? { codexProfile: previous.codexProfile }
+        : {}),
+      ...(previous?.launchMode ? { launchMode: previous.launchMode } : {}),
       ...(previous?.codexSandbox ? { codexSandbox: previous.codexSandbox } : {}),
+      ...(previous?.codexModel !== undefined ? { codexModel: previous.codexModel } : {}),
+      ...(previous?.codexPersonality ? { codexPersonality: previous.codexPersonality } : {}),
     };
+    this.schedulePersist();
+  }
+
+  pendingCodexCwdFor(chatId: string): string | undefined {
+    return this.data.chats[chatId]?.pendingCwd;
+  }
+
+  cancelCodexLaunch(chatId: string): void {
+    const previous = this.data.chats[chatId];
+    if (!previous) return;
+    const { pendingCwd: _pendingCwd, launchPending: _launchPending, ...rest } = previous;
+    this.data.chats[chatId] = rest;
     this.schedulePersist();
   }
 
@@ -105,7 +133,7 @@ export class WorkspaceStore {
     const previous = this.data.chats[chatId];
     if (!previous?.cwd) throw new Error(`workspace cwd is not set for scope: ${chatId}`);
     this.data.chats[chatId] = {
-      cwd: previous.cwd,
+      cwd: previous.pendingCwd ?? previous.cwd,
       codexProfile: profile,
       launchMode,
       ...(launchMode === 'resume' ? { launchPending: true } : {}),
@@ -169,6 +197,28 @@ export class WorkspaceStore {
   removeCwd(chatId: string): boolean {
     if (!(chatId in this.data.chats)) return false;
     delete this.data.chats[chatId];
+    this.schedulePersist();
+    return true;
+  }
+
+  projectChatFor(cwd: string): ProjectChatBinding | undefined {
+    const binding = this.data.projectChats[cwd];
+    return binding ? { ...binding } : undefined;
+  }
+
+  projectPathForChat(chatId: string): string | undefined {
+    return Object.entries(this.data.projectChats)
+      .find(([, binding]) => binding.chatId === chatId)?.[0];
+  }
+
+  setProjectChat(cwd: string, binding: ProjectChatBinding): void {
+    this.data.projectChats[cwd] = { ...binding };
+    this.schedulePersist();
+  }
+
+  removeProjectChat(cwd: string): boolean {
+    if (!(cwd in this.data.projectChats)) return false;
+    delete this.data.projectChats[cwd];
     this.schedulePersist();
     return true;
   }

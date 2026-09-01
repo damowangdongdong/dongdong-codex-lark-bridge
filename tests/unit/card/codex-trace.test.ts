@@ -22,7 +22,7 @@ describe('Codex trace cards', () => {
     }));
 
     expect(rendered).toContain('Reasoning');
-    expect(rendered).toContain('Terminal input');
+    expect(rendered).toContain('User input');
     expect(rendered).toContain('Commentary');
     expect(rendered).toContain('shell · input');
     expect(rendered).toContain('shell · output');
@@ -34,6 +34,38 @@ describe('Codex trace cards', () => {
     expect(rendered).toContain('--profile freerouter');
     expect(rendered).toContain('thread-1');
     expect(rendered).toContain('"expanded":false');
+  });
+
+  it('hides bridge metadata from live and resumed user-input sections', () => {
+    const wrapped = [
+      '# lark-channel-bridge 运行约定',
+      '<bridge_instructions>',
+      '["内部指令"]',
+      '</bridge_instructions>',
+      '<user_input>',
+      '{"text":"只展示这句"}',
+      '</user_input>',
+    ].join('\n');
+    const live = JSON.stringify(renderRunTraceCards(stateFrom([
+      { type: 'user_text', content: wrapped },
+      { type: 'done', terminationReason: 'normal' },
+    ]), { sandbox: 'danger-full-access' }));
+    const history = JSON.stringify(renderCodexHistoryCards({
+      thread: {
+        id: 'thread-wrapped',
+        turns: [{
+          status: 'completed',
+          items: [{ type: 'userMessage', content: [{ type: 'input_text', text: wrapped }] }],
+        }],
+      },
+    }, '/repo'));
+
+    expect(live).toContain('只展示这句');
+    expect(history).toContain('只展示这句');
+    expect(live).not.toContain('bridge_instructions');
+    expect(history).not.toContain('bridge_instructions');
+    expect(live).not.toContain('user_input');
+    expect(history).not.toContain('user_input');
   });
 
   it('paginates long tool output without dropping its beginning or end', () => {

@@ -138,8 +138,9 @@ If a profile was created with the wrong agent kind, stop or unregister any match
 | Command | Effect |
 |---|---|
 | `/new`, `/clear`, `/reset` | Clear the current session |
-| `/new chat [name]` | Create a separate Feishu/Lark group for the current path; inherit Codex profile/access and start a fresh thread |
+| `/new chat [name]` | Enter the dedicated group for the current path, reusing it when still available, and start a fresh thread |
 | `/cd <path>` | Switch working directory; Codex then asks for a CLI profile and new/resume mode |
+| `/profile` | Re-select the Codex CLI profile and new/resume mode inside the current project group |
 | `/ws list` | List named workspaces |
 | `/ws save <name>` | Save the current working directory as a named workspace |
 | `/ws use <name>` | Switch to a named workspace; Codex then opens the same launch picker |
@@ -170,7 +171,7 @@ DMs do not require an @ mention. Groups and topic groups require `@bot` by defau
 
 ### Codex CLI workflow
 
-Codex uses one persistent `codex app-server` per selected Codex CLI profile. After `/cd` or `/ws use`, the bridge does not start a session automatically: the launch card asks whether to use the default Codex configuration (no `--profile`) or a discovered named profile such as `freerouter`, and whether to create or resume a thread. `/resume` shows readable candidates and, after selection, paginated history from that thread.
+Codex uses one persistent `codex app-server` per selected Codex CLI profile. After `/cd` or `/ws use`, the bridge does not start a session automatically: the launch card asks whether to use the default Codex configuration (no `--profile`) or a discovered named profile such as `freerouter`, and whether to create or resume a thread. From a direct chat, continuing opens the path's dedicated project group; an existing live group for the same canonical path is reused. Use `/profile` in that group to switch profiles or choose new/resume again. `/resume` shows readable candidates and, after selection, paginated history from that thread.
 
 While a Codex turn is running, use **↵ Insert now** to steer the active turn (Enter semantics), or **⇥ Queue** to run the instruction after it completes (Tab semantics). `/attach` prints `codex --remote <endpoint> resume <thread-id>`; input entered in that attached terminal and its resulting progress/final answer are mirrored back to Feishu. Feishu-originated turns use the same app-server and thread.
 

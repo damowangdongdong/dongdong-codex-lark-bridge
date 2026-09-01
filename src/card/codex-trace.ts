@@ -1,4 +1,5 @@
 import type { NoticeEntry, RunState, ToolEntry } from './run-state';
+import { extractBridgeUserInput } from '../agent/prompt';
 import { deepMaskEmails } from './mask-email';
 
 const SECTION_CHARS = 7_000;
@@ -22,7 +23,7 @@ export function renderRunTraceCards(
   }
   for (const block of state.blocks) {
     if (block.kind === 'user') {
-      sections.push(...sectionChunks('👤 Terminal input', block.content));
+      sections.push(...sectionChunks('👤 User input', sanitizeUserInput(block.content)));
     } else if (block.kind === 'text') {
       sections.push(...sectionChunks('💬 Commentary', block.content));
     } else if (block.kind === 'notice') {
@@ -116,7 +117,7 @@ function historyItemSections(item: Record<string, unknown>): TraceSection[] {
   const type = stringValue(item.type) ?? 'item';
   switch (type) {
     case 'userMessage':
-      return sectionChunks('👤 User', contentText(item));
+      return sectionChunks('👤 User', sanitizeUserInput(contentText(item)));
     case 'agentMessage':
       return sectionChunks(
         stringValue(item.phase) === 'commentary' ? '💬 Commentary' : '✅ Codex',
@@ -240,6 +241,10 @@ function contentText(item: Record<string, unknown>): string {
     .map((part) => part && typeof part.text === 'string' ? part.text : '')
     .filter(Boolean)
     .join('\n');
+}
+
+function sanitizeUserInput(input: string): string {
+  return extractBridgeUserInput(input) ?? input;
 }
 
 function reasoningText(item: Record<string, unknown>): string {

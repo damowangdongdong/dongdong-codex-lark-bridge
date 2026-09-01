@@ -20,6 +20,10 @@ export interface UnitInputs {
    * tools (lark-cli, claude) can be resolved by name. systemd user units
    * inherit a minimal env otherwise. */
   envPath: string;
+  /** Proxy variables captured from the installing shell. systemd user units
+   * do not inherit them, while the bridge uses them for both Feishu REST and
+   * WebSocket traffic. */
+  proxyEnv?: NodeJS.ProcessEnv;
   /** Service id (profile name, or the reserved supervisor id) — drives the
    * unit name and log paths. */
   profile: string;
@@ -48,6 +52,19 @@ export function buildUnit(inputs: UnitInputs): string {
   // Profile names / flags are validated safe tokens (no spaces), so appending
   // them unquoted is fine.
   const runArgs = inputs.runArgs.join(' ');
+  const proxyEnvironment = [
+    'HTTP_PROXY',
+    'HTTPS_PROXY',
+    'ALL_PROXY',
+    'NO_PROXY',
+    'http_proxy',
+    'https_proxy',
+    'all_proxy',
+    'no_proxy',
+  ].flatMap((name) => {
+    const value = inputs.proxyEnv?.[name];
+    return value ? [`Environment="${name}=${escape(value)}"`] : [];
+  });
   return `[Unit]
 Description=Lark Channel Bridge bot
 After=network-online.target
@@ -62,6 +79,7 @@ StandardOutput=append:${daemonStdoutPath(inputs.profile)}
 StandardError=append:${daemonStderrPath(inputs.profile)}
 Environment="PATH=${escape(inputs.envPath)}"
 Environment="LARK_CHANNEL_HOME=${escape(inputs.channelHome)}"
+${proxyEnvironment.join('\n')}
 
 [Install]
 WantedBy=default.target
@@ -77,6 +95,7 @@ export async function writeUnit(profile: string, runArgs: string[] = ['run']): P
     nodePath: process.execPath,
     bridgeEntryPath,
     envPath: process.env.PATH ?? '',
+    proxyEnv: process.env,
     profile,
     runArgs,
     channelHome: paths.rootDir,

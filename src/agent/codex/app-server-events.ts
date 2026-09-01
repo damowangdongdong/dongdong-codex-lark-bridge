@@ -1,4 +1,5 @@
 import type { AgentEvent } from '../types';
+import { extractBridgeUserInput } from '../prompt';
 import type { RpcNotification } from './app-server-client';
 
 interface ItemState {
@@ -392,13 +393,16 @@ function codexErrorNotice(
 }
 
 function userMessageText(item: Record<string, unknown>): string {
-  if (typeof item.text === 'string') return item.text;
-  if (!Array.isArray(item.content)) return '';
-  return item.content
+  const content = typeof item.text === 'string'
+    ? item.text
+    : !Array.isArray(item.content)
+      ? ''
+      : item.content
     .map((part) => recordValue(part))
     .map((part) => part && typeof part.text === 'string' ? part.text : '')
     .filter(Boolean)
     .join('\n');
+  return extractBridgeUserInput(content) ?? content;
 }
 
 function itemThinkingText(item: Record<string, unknown>): string {

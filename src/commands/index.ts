@@ -208,6 +208,7 @@ const handlers: Record<string, Handler> = {
   '/codex': handleCodexControl,
   '/permissions': handlePermissions,
   '/permission': handlePermissions,
+  '/profile': handleProfile,
   '/attach': handleAttach,
 };
 
@@ -232,6 +233,7 @@ const ADMIN_COMMANDS = new Set([
   '/meeting',
   '/permissions',
   '/permission',
+  '/profile',
   '/debug-config',
   '/experimental',
   '/delete',
@@ -496,6 +498,24 @@ async function handlePermissions(args: string, ctx: CommandContext): Promise<voi
       ? `✓ Codex 权限已设为 **${effective}**，后续 turn 持续使用。`
       : `✓ 请求的权限超过配置上限，已使用 **${effective}**，后续 turn 持续使用。`,
   );
+}
+
+async function handleProfile(args: string, ctx: CommandContext): Promise<void> {
+  if (ctx.agent.id !== 'codex') {
+    await reply(ctx, '此命令仅适用于 Codex CLI。');
+    return;
+  }
+  if (args.trim()) {
+    await reply(ctx, '直接发送 `/profile`，然后在卡片中选择 profile 与新建/恢复会话。');
+    return;
+  }
+  const cwd = effectiveWorkspaceCwd(ctx);
+  if (!cwd) {
+    await reply(ctx, '请先使用 `/cd <path>` 选择工作目录。');
+    return;
+  }
+  ctx.workspaces.prepareCodexLaunch(ctx.scope, cwd);
+  await showWorkspaceLaunchCard(ctx, cwd);
 }
 
 async function handleAttach(_args: string, ctx: CommandContext): Promise<void> {
@@ -1088,39 +1108,68 @@ async function handleNewChat(rawName: string, ctx: CommandContext): Promise<void
     ? `${ctx.agent.displayName} · ${projectName}`
     : defaultChatName(ctx.agent.displayName));
 
-  let created;
-  try {
-    created = await createBoundChat({
-      channel: ctx.channel,
-      name,
-      inviteOpenId: ctx.msg.senderId,
-    });
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    await reply(ctx, `❌ 创建群失败：${msg}\n\n确认 bot 已开启 \`im:chat\` 权限。`);
-    return;
-  }
+  const project = sourceCwd
+    ? await resolveProjectChat(ctx, sourceCwd, name)
+    : await createUnboundChat(ctx, name);
+  if (!project) return;
 
-  // Inherit cwd from the originating chat so the new group starts in the
-  // same workspace and Codex settings, but always with a fresh thread.
   if (sourceCwd) {
-    ctx.workspaces.inheritForNewScope(ctx.scope, created.chatId, sourceCwd);
+    if (project.chatId !== ctx.scope) {
+      const existing = ctx.workspaces.selectionFor(project.chatId);
+      if (existing) ctx.workspaces.setCwd(project.chatId, sourceCwd);
+      else ctx.workspaces.inheritForNewScope(ctx.scope, project.chatId, sourceCwd);
+    }
+    if (ctx.agent.id === 'codex') {
+      const projectProfile = ctx.workspaces.selectionFor(project.chatId)?.codexProfile;
+      const sourceProfile = ctx.workspaces.selectionFor(ctx.scope)?.codexProfile;
+      const stored = projectProfile !== undefined ? projectProfile : sourceProfile;
+      const profile = stored !== undefined
+        ? stored
+        : ctx.controls.profileConfig.codex?.profile ?? null;
+      ctx.workspaces.setCodexLaunch(project.chatId, profile, 'new');
+      const projectCtx = project.chatId === ctx.scope
+        ? ctx
+        : projectCommandContext(ctx, project.chatId, ctx.msg.messageId);
+      const identity = await currentSessionCatalogIdentity(projectCtx, sourceCwd);
+      if (ctx.sessionCatalog && identity) {
+        ctx.sessionCatalog.archiveActive({ ...identity, now: Date.now() });
+      }
+    }
+    ctx.activeRuns.interrupt(project.chatId);
+    ctx.sessions.clear(project.chatId);
   }
 
-  // Welcome the user inside the new group with a hint about how to start.
   const welcome = sourceCwd
-    ? `🎉 独立项目窗口已建好：\`${sourceCwd}\`\n\n已继承当前 Codex profile/权限设置，下一条消息会创建独立新会话。\n\n@我 + 任意消息开始对话。`
+    ? `🎉 ${project.created ? '独立项目群已建好' : '已复用现有项目群'}：\`${sourceCwd}\`\n\n已继承当前 Codex profile/权限设置，下一条消息会创建独立新会话。\n\n@我 + 任意消息开始对话。`
     : '🎉 群已建好。\n\n@我 + 任意消息开始对话。';
   try {
-    await ctx.channel.send(created.chatId, { markdown: welcome });
+    await ctx.channel.send(project.chatId, { markdown: welcome });
   } catch (err) {
     console.warn('[new-chat] welcome message failed:', err);
   }
 
   await reply(
     ctx,
-    `✓ 已创建群 **${created.name}**，去新群里继续。`,
+    `✓ ${project.created ? '已创建' : '已复用'}群 **${project.name}**，去该群继续。`,
   );
+}
+
+async function createUnboundChat(
+  ctx: CommandContext,
+  name: string,
+): Promise<ResolvedProjectChat | undefined> {
+  try {
+    const created = await createBoundChat({
+      channel: ctx.channel,
+      name,
+      inviteOpenId: ctx.msg.senderId,
+    });
+    return { ...created, created: true };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    await reply(ctx, `❌ 创建群失败：${message}\n\n确认 bot 已开启 \`im:chat\` 权限。`);
+    return undefined;
+  }
 }
 
 async function handleCd(args: string, ctx: CommandContext): Promise<void> {
@@ -1227,7 +1276,10 @@ async function showWorkspaceLaunchCard(
   cwd: string,
   alias?: string,
 ): Promise<void> {
-  const configuredProfile = ctx.controls.profileConfig.codex?.profile;
+  const storedProfile = ctx.workspaces.selectionFor(ctx.scope)?.codexProfile;
+  const configuredProfile = storedProfile !== undefined
+    ? storedProfile ?? undefined
+    : ctx.controls.profileConfig.codex?.profile;
   let profiles: string[] = [];
   try {
     profiles = await discoverCodexProfiles({
@@ -1245,7 +1297,12 @@ async function showWorkspaceLaunchCard(
   if (configuredProfile && !profiles.includes(configuredProfile)) {
     profiles = [...profiles, configuredProfile].sort((a, b) => a.localeCompare(b));
   }
-  const card = workspaceLaunchCard({ cwd, profiles, configuredProfile });
+  const card = workspaceLaunchCard({
+    cwd,
+    profiles,
+    configuredProfile,
+    routesToProjectGroup: ctx.chatMode === 'p2p',
+  });
   await ctx.channel.send(ctx.msg.chatId, { card }, commandReplyOptions(ctx));
   log.info('command', 'workspace-selected-awaiting-codex-launch', {
     scope: ctx.scope,
@@ -1265,27 +1322,155 @@ async function handleWorkspaceLaunch(args: string, ctx: CommandContext): Promise
     return;
   }
   const profile = rawProfile === '__default__' ? null : rawProfile;
-  ctx.workspaces.setCodexLaunch(ctx.scope, profile, rawMode);
-  const cwd = effectiveWorkspaceCwd(ctx);
+  const cwd = ctx.workspaces.pendingCodexCwdFor(ctx.scope) ?? effectiveWorkspaceCwd(ctx);
   if (!cwd) {
     await reply(ctx, '当前工作目录不存在，请重新使用 `/cd <path>`。');
     return;
   }
-  const identity = await currentSessionCatalogIdentity(ctx, cwd);
-  ctx.sessionCatalogIdentity = identity;
-  if (rawMode === 'new') {
-    ctx.activeRuns.interrupt(ctx.scope);
-    if (ctx.sessionCatalog && identity) {
-      ctx.sessionCatalog.archiveActive({ ...identity, now: Date.now() });
-    }
-    ctx.sessions.clear(ctx.scope);
+  const project = await resolveProjectChat(ctx, cwd);
+  if (!project) return;
+
+  let launchCtx = ctx;
+  if (project.chatId !== ctx.msg.chatId || ctx.chatMode === 'topic') {
+    const existing = ctx.workspaces.selectionFor(project.chatId);
+    if (existing) ctx.workspaces.setCwd(project.chatId, cwd);
+    else ctx.workspaces.inheritForNewScope(ctx.scope, project.chatId, cwd);
+    ctx.workspaces.setCodexLaunch(project.chatId, profile, rawMode);
+    ctx.workspaces.cancelCodexLaunch(ctx.scope);
+    if (ctx.chatMode === 'p2p') ctx.workspaces.removeCwd(ctx.scope);
+
+    const anchor = await ctx.channel.send(project.chatId, {
+      markdown: rawMode === 'new'
+        ? `🚀 已选择 ${formatCodexProfile(profile)}\n📁 \`${cwd}\`\n\n下一条消息将在本项目群创建新 Codex 会话。`
+        : `🔁 已选择 ${formatCodexProfile(profile)}\n📁 \`${cwd}\`\n\n正在读取可恢复的 Codex 会话…`,
+    });
+    launchCtx = projectCommandContext(ctx, project.chatId, anchor.messageId);
     await reply(
       ctx,
-      `✓ 已选择 ${formatCodexProfile(profile)}，下一条消息将创建新会话。`,
+      `${project.created ? '✓ 已创建' : '✓ 已复用'}路径对应的项目群 **${project.name}**，请去该群继续。`,
     );
+  } else {
+    ctx.workspaces.setCodexLaunch(ctx.scope, profile, rawMode);
+  }
+
+  const identity = await currentSessionCatalogIdentity(launchCtx, cwd);
+  launchCtx.sessionCatalogIdentity = identity;
+  if (rawMode === 'new') {
+    launchCtx.activeRuns.interrupt(launchCtx.scope);
+    if (launchCtx.sessionCatalog && identity) {
+      launchCtx.sessionCatalog.archiveActive({ ...identity, now: Date.now() });
+    }
+    launchCtx.sessions.clear(launchCtx.scope);
+    if (launchCtx === ctx) {
+      await reply(
+        ctx,
+        `✓ 已选择 ${formatCodexProfile(profile)}，下一条消息将创建新会话。`,
+      );
+    }
     return;
   }
-  await handleResume('', ctx);
+  await handleResume('', launchCtx);
+}
+
+interface ResolvedProjectChat {
+  chatId: string;
+  name: string;
+  created: boolean;
+}
+
+async function resolveProjectChat(
+  ctx: CommandContext,
+  cwd: string,
+  requestedName?: string,
+): Promise<ResolvedProjectChat | undefined> {
+  const currentPath = ctx.chatMode === 'group'
+    ? ctx.workspaces.projectPathForChat(ctx.msg.chatId)
+    : undefined;
+  const mapped = ctx.workspaces.projectChatFor(cwd);
+
+  if (ctx.chatMode === 'group' && (!currentPath || currentPath === cwd)) {
+    if (!mapped || mapped.chatId === ctx.msg.chatId) {
+      const name = mapped?.name
+        ?? ctx.controls.knownChats?.find((chat) => chat.id === ctx.msg.chatId)?.name
+        ?? requestedName
+        ?? projectChatName(ctx, cwd);
+      ctx.workspaces.setProjectChat(cwd, { chatId: ctx.msg.chatId, name });
+      return { chatId: ctx.msg.chatId, name, created: false };
+    }
+  }
+
+  if (mapped) {
+    try {
+      const live = await ctx.channel.getChatInfo(mapped.chatId);
+      const name = live.name || mapped.name;
+      if (name !== mapped.name) {
+        ctx.workspaces.setProjectChat(cwd, { chatId: mapped.chatId, name });
+      }
+      return { chatId: mapped.chatId, name, created: false };
+    } catch (err) {
+      if (isMissingProjectChatError(err)) {
+        ctx.workspaces.removeProjectChat(cwd);
+      } else {
+        log.warn('command', 'project-chat-check-failed', {
+          cwd,
+          message: err instanceof Error ? err.message : String(err),
+        });
+        await reply(ctx, '暂时无法确认已有项目群是否仍存在；为避免重复建群，本次没有创建新群，请稍后重试。');
+        return undefined;
+      }
+    }
+  }
+
+  const name = requestedName || projectChatName(ctx, cwd);
+  try {
+    const created = await createBoundChat({
+      channel: ctx.channel,
+      name,
+      inviteOpenId: ctx.msg.senderId,
+    });
+    ctx.workspaces.setProjectChat(cwd, created);
+    ctx.controls.knownChats = [
+      ...(ctx.controls.knownChats ?? []).filter((chat) => chat.id !== created.chatId),
+      { id: created.chatId, name: created.name },
+    ];
+    return { ...created, created: true };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    await reply(ctx, `❌ 创建项目群失败：${message}\n\n确认 bot 已开启 \`im:chat\` 权限。`);
+    return undefined;
+  }
+}
+
+function isMissingProjectChatError(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false;
+  const code = (err as { code?: unknown }).code;
+  return code === 'target_revoked' || code === 'format_error';
+}
+
+function projectChatName(ctx: CommandContext, cwd: string): string {
+  return `${ctx.agent.displayName} · ${basename(cwd)}`;
+}
+
+function projectCommandContext(
+  ctx: CommandContext,
+  chatId: string,
+  messageId: string,
+): CommandContext {
+  const { threadId: _threadId, ...sourceMessage } = ctx.msg;
+  return {
+    ...ctx,
+    msg: {
+      ...sourceMessage,
+      messageId,
+      chatId,
+      chatType: 'group',
+    },
+    scope: chatId,
+    chatMode: 'group',
+    sessionCatalogIdentity: undefined,
+    formValue: undefined,
+    fromCardAction: false,
+  };
 }
 
 async function currentSessionCatalogIdentity(
@@ -1421,7 +1606,10 @@ async function handleResume(args: string, ctx: CommandContext): Promise<void> {
     return;
   }
 
-  if (ctx.chatMode !== 'p2p') {
+  const isManagedProjectGroup =
+    ctx.chatMode === 'group'
+    && ctx.workspaces.projectChatFor(cwd)?.chatId === ctx.msg.chatId;
+  if (ctx.chatMode !== 'p2p' && !isManagedProjectGroup) {
     await reply(ctx, '群聊中不展示历史会话详情。请私聊 bot 使用 `/resume` 查看和选择历史会话。');
     return;
   }
@@ -1676,7 +1864,7 @@ function runtimeAccessStatus(
 ): { label: string; value: string } {
   if (profileConfig.agentKind === 'claude') {
     return {
-      label: 'permission',
+      label: '权限',
       value: accessToClaudePermissionMode(
         profileConfig.permissions.defaultAccess,
         profileConfig.permissions,
@@ -1684,8 +1872,8 @@ function runtimeAccessStatus(
     };
   }
   return {
-    label: 'sandbox',
-    value: `${codexSandbox ?? profileConfig.sandbox.defaultMode} (max ${accessToCodexSandbox(profileConfig.permissions.maxAccess)})`,
+    label: '权限',
+    value: `${codexSandbox ?? profileConfig.sandbox.defaultMode}（上限 ${accessToCodexSandbox(profileConfig.permissions.maxAccess)}）`,
   };
 }
 
@@ -1746,6 +1934,7 @@ async function handleStatus(_args: string, ctx: CommandContext): Promise<void> {
     cwd,
     sessionId: isCodex ? catalogEntry?.threadId : sess?.sessionId,
     emptySessionText: isCodex ? '(未建立)' : undefined,
+    sessionLabel: isCodex ? 'Codex 会话' : '会话',
     sessionStale: !isCodex && Boolean(cwd && sess && sess.cwd !== cwd),
     agentName: ctx.agent.displayName,
     runtimeAccess: runtimeAccessStatus(
@@ -1768,7 +1957,11 @@ async function handleStatus(_args: string, ctx: CommandContext): Promise<void> {
           ) ?? '默认（无 --profile）',
           codexLaunchState: ctx.workspaces.codexLaunchPendingFor(ctx.scope)
             ? '等待选择'
-            : (ctx.workspaces.selectionFor(ctx.scope)?.launchMode ?? '自动'),
+            : ctx.workspaces.selectionFor(ctx.scope)?.launchMode === 'new'
+              ? '新建'
+              : ctx.workspaces.selectionFor(ctx.scope)?.launchMode === 'resume'
+                ? '恢复'
+                : '自动',
         }
       : {}),
   });
@@ -1777,11 +1970,12 @@ async function handleStatus(_args: string, ctx: CommandContext): Promise<void> {
 
 function formatOwnerState(ctx: CommandContext): string {
   const state = ctx.controls.ownerRefreshState;
-  const owner = ctx.controls.botOwnerId ? 'present' : 'missing';
+  const stateLabel = state === 'ok' ? '正常' : state === 'failed' ? '失败' : '未知';
+  const owner = ctx.controls.botOwnerId ? '已获取' : '未获取';
   const refreshed = ctx.controls.ownerRefreshedAt
-    ? ` refreshed=${new Date(ctx.controls.ownerRefreshedAt).toISOString()}`
+    ? `，刷新时间 ${new Date(ctx.controls.ownerRefreshedAt).toISOString()}`
     : '';
-  return `${state} owner=${owner}${refreshed}`;
+  return `${stateLabel}，管理员 ${owner}${refreshed}`;
 }
 
 async function handleStop(args: string, ctx: CommandContext): Promise<void> {

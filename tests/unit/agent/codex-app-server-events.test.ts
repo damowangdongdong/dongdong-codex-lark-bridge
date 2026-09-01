@@ -338,6 +338,40 @@ describe('Codex app-server event translator', () => {
     ]);
   });
 
+  it('shows only the human input from a bridge-wrapped user message', () => {
+    const translator = new CodexAppServerEventTranslator('thread-1');
+    translator.setTurnId('turn-1');
+    const wrapped = [
+      '# lark-channel-bridge 运行约定',
+      '<bridge_context>',
+      '{"chatId":"oc_test","chatType":"p2p"}',
+      '</bridge_context>',
+      '<bridge_instructions>',
+      '["内部指令"]',
+      '</bridge_instructions>',
+      '<user_input>',
+      '{"text":"请只读取 package.json"}',
+      '</user_input>',
+    ].join('\n');
+
+    expect(translateAll(translator, [
+      notification('item/started', {
+        item: {
+          id: 'bridge-user',
+          type: 'userMessage',
+          content: [{ type: 'text', text: wrapped }],
+        },
+      }),
+      notification('item/completed', {
+        item: {
+          id: 'bridge-user',
+          type: 'userMessage',
+          content: [{ type: 'text', text: wrapped }],
+        },
+      }),
+    ])).toEqual([{ type: 'user_text', content: '请只读取 package.json' }]);
+  });
+
   it('uses completed plan and reasoning items when deltas are absent or differ', () => {
     const translator = new CodexAppServerEventTranslator('thread-1');
     translator.setTurnId('turn-1');

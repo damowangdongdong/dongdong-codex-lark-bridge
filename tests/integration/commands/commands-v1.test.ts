@@ -227,14 +227,14 @@ describe('Bridge command contracts', () => {
     const status = JSON.stringify(lastContent(h.channel));
     expect(status).toContain('Fake Agent');
     expect(status).toContain('工作目录');
-    expect(status).toContain('**session**');
+    expect(status).toContain('**会话**');
     expect(status).toContain('(无)');
     expect(status).not.toContain('**conversation**');
-    expect(status).toContain('permission');
+    expect(status).toContain('权限');
     expect(status).toContain('plan');
     expect(status).not.toContain('bypassPermissions');
     expect(status).not.toContain('workspace-write/workspace-write');
-    expect(status).toContain('owner');
+    expect(status).toContain('管理员身份');
     expect(status).toContain(jsonStringFragment(await realpath(h.tmp.workspace)));
   });
 

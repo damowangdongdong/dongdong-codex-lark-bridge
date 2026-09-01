@@ -41,7 +41,7 @@ function renderBlock(block: Block): string {
   if (block.kind === 'text') {
     return block.content.trim();
   }
-  if (block.kind === 'user') return `> 👤 **终端输入**\n> ${block.content.trim()}`;
+  if (block.kind === 'user') return `> 👤 **输入**\n> ${block.content.trim()}`;
   if (block.kind === 'notice') return renderNoticeText(block.notice);
   return toolLine(block.tool);
 }

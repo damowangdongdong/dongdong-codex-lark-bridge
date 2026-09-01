@@ -122,3 +122,17 @@ export function safeJsonStringify(value: unknown): string {
     .replace(/\u2028/g, '\\u2028')
     .replace(/\u2029/g, '\\u2029');
 }
+
+/** Return only the human-authored text from a structured bridge prompt. */
+export function extractBridgeUserInput(input: string): string | undefined {
+  const match = input.match(/<user_input>\n([\s\S]*?)\n<\/user_input>/);
+  if (!match?.[1]) return undefined;
+  try {
+    const parsed = JSON.parse(match[1]) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return undefined;
+    const text = (parsed as Record<string, unknown>).text;
+    return typeof text === 'string' ? text : undefined;
+  } catch {
+    return undefined;
+  }
+}

@@ -35,6 +35,10 @@ describe('profile-scoped daemon paths and arguments', () => {
       nodePath: '/usr/local/bin/node',
       bridgeEntryPath: '/repo/bin/lark-channel-bridge.mjs',
       envPath: '/usr/local/bin:/usr/bin',
+      proxyEnv: {
+        https_proxy: 'http://127.0.0.1:7897',
+        ALL_PROXY: 'socks5://127.0.0.1:7897',
+      },
       profile: 'codex-dev',
       runArgs: ['run', '--profile', 'codex-dev'],
       channelHome: '/tmp/lark-channel-home',
@@ -48,6 +52,8 @@ describe('profile-scoped daemon paths and arguments', () => {
     expect(buildPlist(inputs)).toContain('<key>LARK_CHANNEL_HOME</key>\n        <string>/tmp/lark-channel-home</string>');
     expect(buildUnit(inputs)).toContain('run --profile codex-dev');
     expect(buildUnit(inputs)).toContain('Environment="LARK_CHANNEL_HOME=/tmp/lark-channel-home"');
+    expect(buildUnit(inputs)).toContain('Environment="https_proxy=http://127.0.0.1:7897"');
+    expect(buildUnit(inputs)).toContain('Environment="ALL_PROXY=socks5://127.0.0.1:7897"');
     expect(buildLauncherCmd(inputs)).toContain('run --profile codex-dev');
     expect(buildLauncherCmd(inputs)).toContain('set "LARK_CHANNEL_HOME=/tmp/lark-channel-home"');
   });

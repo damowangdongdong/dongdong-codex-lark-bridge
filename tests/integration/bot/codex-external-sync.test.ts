@@ -47,7 +47,7 @@ describe('attached Codex terminal synchronization', () => {
     const traceCards = JSON.stringify(channel.sent.map((entry) => entry.content));
     expect(traceCards).toContain('Codex 完整轨迹');
     expect(traceCards).toContain('terminal final answer');
-    expect(traceCards).toContain('Terminal input');
+    expect(traceCards).toContain('User input');
     expect(traceCards).toContain('typed in attached terminal');
     expect(traceCards).toContain('terminal reasoning');
     expect(traceCards).toContain('terminal commentary');

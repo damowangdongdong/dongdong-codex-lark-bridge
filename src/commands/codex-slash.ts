@@ -56,6 +56,8 @@ export const CODEX_SLASH_COMMANDS = {
   '/quit': 'attached-tui',
   '/review': 'app-server',
   '/status': 'bridge',
+  // Bridge-native profile switcher for one-workspace-per-group workflows.
+  '/profile': 'bridge',
   '/usage': 'app-server',
   '/debug-config': 'app-server',
   '/statusline': 'attached-tui',

@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, realpath, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { CardActionEvent, NormalizedMessage } from '@larksuite/channel';
@@ -34,9 +34,21 @@ interface Harness {
   codexHistory: CodexThreadHistoryEntry[];
   activeRuns: ActiveRuns;
   pending: PendingQueue;
+  projectChats: {
+    chats: Array<{ id: string; name: string }>;
+    createCalls: number;
+    getError?: Error;
+  };
   run(content: string, options?: { withCatalogIdentity?: boolean; chatMode?: 'p2p' | 'group' | 'topic' }): Promise<boolean>;
-  dispatchResumeArg(arg: string): Promise<void>;
-  dispatchLaunch(profile: string, mode: 'new' | 'resume'): Promise<void>;
+  dispatchResumeArg(
+    arg: string,
+    options?: { chatId?: string; chatMode?: 'p2p' | 'group' | 'topic' },
+  ): Promise<void>;
+  dispatchLaunch(
+    profile: string,
+    mode: 'new' | 'resume',
+    options?: { chatId?: string; chatMode?: 'p2p' | 'group' | 'topic' },
+  ): Promise<void>;
 }
 
 const cleanups: Array<() => Promise<void>> = [];
@@ -275,21 +287,21 @@ describe('agent-aware resume commands', () => {
     expect(rendered).not.toContain('thread-alpha-secret');
   });
 
-  it('labels Codex status as session while reading the recorded thread id', async () => {
+  it('用中文状态标签展示 Codex 会话和已记录的 thread id', async () => {
     const h = await createHarness('codex');
 
     await expect(h.run('/status')).resolves.toBe(true);
     let status = JSON.stringify(lastContent(h.channel));
-    expect(status).toContain('**session**');
+    expect(status).toContain('**Codex 会话**');
     expect(status).toContain('未建立');
+    expect(status).not.toContain('**session**');
     expect(status).not.toContain('**thread**');
-    expect(status).not.toContain('**conversation**');
 
     h.catalog.upsertActive({ ...h.identity, threadId: 'thread-current', now: 1000 });
     await expect(h.run('/status')).resolves.toBe(true);
 
     status = JSON.stringify(lastContent(h.channel));
-    expect(status).toContain('**session**');
+    expect(status).toContain('**Codex 会话**');
     expect(status).toContain('thread-c');
     expect(status).not.toContain('未建立');
   });
@@ -324,13 +336,116 @@ describe('agent-aware resume commands', () => {
 
     await h.dispatchLaunch('__default__', 'new');
 
+    expect(h.projectChats.createCalls).toBe(1);
     expect(h.workspaces.codexLaunchPendingFor('chat-1')).toBe(false);
-    expect(h.workspaces.selectionFor('chat-1')).toMatchObject({
+    expect(h.workspaces.selectionFor('chat-1')).toBeUndefined();
+    expect(h.workspaces.projectChatFor(await realpath(target))).toEqual({
+      chatId: 'oc_project_1',
+      name: 'Codex CLI · next-workspace',
+    });
+    expect(h.workspaces.selectionFor('oc_project_1')).toMatchObject({
+      cwd: await realpath(target),
       codexProfile: null,
       launchMode: 'new',
     });
-    expect(h.workspaces.codexProfileFor('chat-1', 'freerouter')).toBeUndefined();
-    expect(lastMarkdown(h.channel)).toContain('无 `--profile`');
+    expect(h.workspaces.codexProfileFor('oc_project_1', 'freerouter')).toBeUndefined();
+    expect(h.channel.sent.some((entry) =>
+      entry.chatId === 'oc_project_1'
+      && JSON.stringify(entry.content).includes('无 `--profile`'),
+    )).toBe(true);
+
+    await h.run('/status', { chatMode: 'group' });
+    const status = lastContentString(h.channel);
+    expect(status).toContain('**对话范围**');
+    expect(status).toContain('**Bridge 配置**');
+    expect(status).toContain('**工作目录**');
+    expect(status).toContain('**Codex 会话**');
+    expect(status).toContain('**Codex 配置**');
+    expect(status).toContain('**权限**');
+    expect(status).toContain('**会话方式**');
+    expect(status).not.toContain('**scope**');
+    expect(status).not.toContain('**sandbox**');
+    expect(status).not.toContain('**launch**');
+  });
+
+  it('对同一路径复用仍存在的项目群，群已删除时才重建', async () => {
+    const h = await createHarness('codex');
+
+    await expect(h.run(`/cd ${h.tmp.workspace}`)).resolves.toBe(true);
+    await h.dispatchLaunch('freerouter', 'new');
+    expect(h.projectChats.createCalls).toBe(1);
+    expect(h.workspaces.projectChatFor(await realpath(h.tmp.workspace))?.chatId)
+      .toBe('oc_project_1');
+
+    await expect(h.run(`/cd ${h.tmp.workspace}`)).resolves.toBe(true);
+    await h.dispatchLaunch('freerouter', 'new');
+    expect(h.projectChats.createCalls).toBe(1);
+    expect(h.channel.sent.some((entry) =>
+      entry.chatId === 'chat-1'
+      && JSON.stringify(entry.content).includes('已复用'),
+    )).toBe(true);
+
+    h.projectChats.chats.length = 0;
+    await expect(h.run(`/cd ${h.tmp.workspace}`)).resolves.toBe(true);
+    await h.dispatchLaunch('freerouter', 'new');
+    expect(h.projectChats.createCalls).toBe(2);
+    expect(h.workspaces.projectChatFor(await realpath(h.tmp.workspace))?.chatId)
+      .toBe('oc_project_2');
+  });
+
+  it('/new chat 复用同一路径项目群并归档该群的当前 Codex thread', async () => {
+    const h = await createHarness('codex');
+
+    await expect(h.run(`/cd ${h.tmp.workspace}`)).resolves.toBe(true);
+    await h.dispatchLaunch('freerouter', 'new');
+    const projectIdentity = await commandIdentity(
+      'codex',
+      h.controls.profileConfig,
+      h.controls,
+      h.tmp.workspace,
+      'freerouter',
+      'oc_project_1',
+    );
+    h.catalog.upsertActive({ ...projectIdentity, threadId: 'thread-current', now: 1000 });
+
+    await expect(h.run('/new chat')).resolves.toBe(true);
+
+    expect(h.projectChats.createCalls).toBe(1);
+    expect(h.catalog.activeFor(projectIdentity)).toBeUndefined();
+    expect(h.workspaces.selectionFor('oc_project_1')).toMatchObject({
+      codexProfile: 'freerouter',
+      launchMode: 'new',
+    });
+    expect(lastMarkdown(h.channel)).toContain('已复用');
+  });
+
+  it('无法确认已有项目群状态时不重复建群', async () => {
+    const h = await createHarness('codex');
+
+    await expect(h.run(`/cd ${h.tmp.workspace}`)).resolves.toBe(true);
+    await h.dispatchLaunch('freerouter', 'new');
+    h.projectChats.getError = new Error('network unavailable');
+
+    await expect(h.run(`/cd ${h.tmp.workspace}`)).resolves.toBe(true);
+    await h.dispatchLaunch('freerouter', 'new');
+
+    expect(h.projectChats.createCalls).toBe(1);
+    expect(h.workspaces.codexLaunchPendingFor('chat-1')).toBe(true);
+    expect(lastMarkdown(h.channel)).toContain('避免重复建群');
+  });
+
+  it('在同一项目群内用 /profile 重新选择 Codex profile', async () => {
+    const h = await createHarness('codex');
+    h.workspaces.setProjectChat(h.tmp.workspace, { chatId: 'chat-1', name: 'Project' });
+    h.workspaces.setCodexLaunch('chat-1', 'freerouter', 'new');
+
+    await expect(h.run('/profile', { chatMode: 'group' })).resolves.toBe(true);
+
+    const card = lastContentString(h.channel);
+    expect(card).toContain('选择 Codex 启动方式');
+    expect(card).toContain('freerouter');
+    expect(h.workspaces.codexLaunchPendingFor('chat-1')).toBe(true);
+    expect(h.projectChats.createCalls).toBe(0);
   });
 
   it('keeps a requested Codex resume pending until a concrete history thread is selected', async () => {
@@ -340,13 +455,13 @@ describe('agent-aware resume commands', () => {
     await expect(h.run(`/cd ${h.tmp.workspace}`)).resolves.toBe(true);
     await h.dispatchLaunch('freerouter', 'resume');
 
-    expect(h.workspaces.codexLaunchPendingFor('chat-1')).toBe(true);
+    expect(h.workspaces.codexLaunchPendingFor('oc_project_1')).toBe(true);
     expect(lastContentString(h.channel)).toContain('resume me');
     const [nonce] = resumeArgsFromCard(lastContent(h.channel));
-    await h.dispatchResumeArg(nonce!);
+    await h.dispatchResumeArg(nonce!, { chatId: 'oc_project_1', chatMode: 'group' });
 
-    expect(h.workspaces.codexLaunchPendingFor('chat-1')).toBe(false);
-    expect(h.workspaces.selectionFor('chat-1')).toMatchObject({
+    expect(h.workspaces.codexLaunchPendingFor('oc_project_1')).toBe(false);
+    expect(h.workspaces.selectionFor('oc_project_1')).toMatchObject({
       codexProfile: 'freerouter',
       launchMode: 'resume',
     });
@@ -356,6 +471,7 @@ describe('agent-aware resume commands', () => {
       h.controls,
       h.tmp.workspace,
       'freerouter',
+      'oc_project_1',
     );
     expect(h.catalog.activeFor(selectedIdentity)).toMatchObject({ threadId: 'thread-resume' });
   });
@@ -372,7 +488,7 @@ describe('agent-aware resume commands', () => {
 
     await expect(h.run('/status')).resolves.toBe(true);
     const status = lastContentString(h.channel);
-    expect(status).toContain('workspace-write (max workspace-write)');
+    expect(status).toContain('workspace-write（上限 workspace-write）');
     expect(status).toContain('默认（无 --profile）');
 
     await expect(h.run('/permissions')).resolves.toBe(true);
@@ -577,6 +693,21 @@ async function createHarness(
 ): Promise<Harness> {
   const tmp = await createTmpProfile(`resume-command-${agentKind}-`);
   const channel = createFakeChannel();
+  const projectChats: Harness['projectChats'] = { chats: [], createCalls: 0 };
+  Object.assign(channel, {
+    getChatInfo: async (chatId: string) => {
+      if (projectChats.getError) throw projectChats.getError;
+      const chat = projectChats.chats.find((candidate) => candidate.id === chatId);
+      if (!chat) throw Object.assign(new Error('chat not found'), { code: 'target_revoked' });
+      return { chatId: chat.id, name: chat.name, chatType: 'group' };
+    },
+    createChat: async (input: { name: string }) => {
+      projectChats.createCalls += 1;
+      const chat = { id: `oc_project_${projectChats.createCalls}`, name: input.name };
+      projectChats.chats.push(chat);
+      return { chatId: chat.id };
+    },
+  });
   const sessions = new SessionStore(join(tmp.profile, 'sessions.json'));
   const workspaces = new WorkspaceStore(join(tmp.profile, 'workspaces.json'));
   const catalog = new SessionCatalog(join(tmp.profile, 'session-catalog.json'));
@@ -605,8 +736,9 @@ async function createHarness(
     workspaces.setCwd('chat-1', tmp.workspace);
   }
   const identity = await commandIdentity(agentKind, profileConfig, controls, tmp.workspace);
+  const cardModes = new Map<string, 'p2p' | 'group' | 'topic'>();
   const chatModeCache = {
-    resolve: async () => 'p2p',
+    resolve: async (_channel: unknown, chatId: string) => cardModes.get(chatId) ?? 'p2p',
   } as unknown as ChatModeCache;
 
   const run = (
@@ -629,10 +761,15 @@ async function createHarness(
       codexHistoryProvider: async () => codexHistory,
     });
 
-  const dispatchResumeArg = (arg: string): Promise<void> =>
-    handleCardAction({
+  const dispatchResumeArg = (
+    arg: string,
+    dispatchOptions: { chatId?: string; chatMode?: 'p2p' | 'group' | 'topic' } = {},
+  ): Promise<void> => {
+    const chatId = dispatchOptions.chatId ?? 'chat-1';
+    cardModes.set(chatId, dispatchOptions.chatMode ?? 'p2p');
+    return handleCardAction({
       channel: channel as unknown as Parameters<typeof handleCardAction>[0]['channel'],
-      evt: cardEvent({ cmd: 'resume.use', arg }),
+      evt: cardEvent({ cmd: 'resume.use', arg }, undefined, chatId),
       sessions,
       sessionCatalog: catalog,
       workspaces,
@@ -644,13 +781,21 @@ async function createHarness(
       codexHistoryProvider: async () => codexHistory,
       claudeHistoryProvider: async () => claudeHistory,
     });
+  };
 
-  const dispatchLaunch = (profile: string, mode: 'new' | 'resume'): Promise<void> =>
-    handleCardAction({
+  const dispatchLaunch = (
+    profile: string,
+    mode: 'new' | 'resume',
+    dispatchOptions: { chatId?: string; chatMode?: 'p2p' | 'group' | 'topic' } = {},
+  ): Promise<void> => {
+    const chatId = dispatchOptions.chatId ?? 'chat-1';
+    cardModes.set(chatId, dispatchOptions.chatMode ?? 'p2p');
+    return handleCardAction({
       channel: channel as unknown as Parameters<typeof handleCardAction>[0]['channel'],
       evt: cardEvent(
         { cmd: 'ws.launch' },
         { codex_profile: profile, launch_mode: mode },
+        chatId,
       ),
       sessions,
       sessionCatalog: catalog,
@@ -663,6 +808,7 @@ async function createHarness(
       codexHistoryProvider: async () => codexHistory,
       claudeHistoryProvider: async () => claudeHistory,
     });
+  };
 
   cleanups.push(async () => {
     pending.cancelAll();
@@ -683,6 +829,7 @@ async function createHarness(
     codexHistory,
     activeRuns,
     pending,
+    projectChats,
     run,
     dispatchResumeArg,
     dispatchLaunch,
@@ -708,6 +855,7 @@ async function commandIdentity(
   controls: Controls,
   cwd: string,
   codexProfile?: string,
+  scopeId = 'chat-1',
 ): Promise<SessionCatalogIdentity> {
   const workspace = await resolveWorkingDirectory(cwd);
   if (!workspace.ok) throw new Error(workspace.userVisible);
@@ -716,7 +864,7 @@ async function commandIdentity(
   const policy = evaluateRunPolicy({
     scope: {
       source: 'im',
-      chatId: 'chat-1',
+      chatId: scopeId,
       actorId: 'ou-user',
     },
     attachments: [],
@@ -733,7 +881,7 @@ async function commandIdentity(
   });
   if (!policy.ok) throw new Error(policy.rejectReason.userVisible);
   return {
-    scopeId: 'chat-1',
+    scopeId,
     agentId: capability.agentId,
     cwdRealpath: workspace.cwdRealpath,
     policyFingerprint: policy.policyFingerprint,
@@ -765,10 +913,11 @@ function message(content: string): NormalizedMessage {
 function cardEvent(
   value: Record<string, unknown>,
   formValue?: Record<string, unknown>,
+  chatId = 'chat-1',
 ): CardActionEvent {
   return {
     action: { value },
-    chatId: 'chat-1',
+    chatId,
     messageId: 'om-card',
     operator: {
       openId: 'ou-user',

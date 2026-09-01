@@ -142,7 +142,7 @@ describe('Claude slash command visible behavior', () => {
     await expect(h.run('/status')).resolves.toBe(true);
     expect(lastContent(h.channel)).toHaveProperty('card');
     expect(JSON.stringify(lastContent(h.channel))).toContain('lark-cli');
-    expect(JSON.stringify(lastContent(h.channel))).toContain('user-ready');
+    expect(JSON.stringify(lastContent(h.channel))).toContain('用户身份已就绪');
 
     await expect(h.run('/help')).resolves.toBe(true);
     expect(lastContent(h.channel)).toHaveProperty('card');
@@ -165,8 +165,8 @@ describe('Claude slash command visible behavior', () => {
 
     const status = JSON.stringify(lastContent(h.channel));
     expect(status).toContain('lark-cli');
-    expect(status).toContain('user-ready');
-    expect(status).not.toContain('user-missing');
+    expect(status).toContain('用户身份已就绪');
+    expect(status).not.toContain('缺少用户授权');
   });
 
   it('does not report lark-cli user-ready for display-only target user strings', async () => {
@@ -182,8 +182,8 @@ describe('Claude slash command visible behavior', () => {
 
     const status = JSON.stringify(lastContent(h.channel));
     expect(status).toContain('lark-cli');
-    expect(status).toContain('user-missing');
-    expect(status).not.toContain('user-ready');
+    expect(status).toContain('缺少用户授权');
+    expect(status).not.toContain('用户身份已就绪');
   });
 
   it('does not report lark-cli user-ready for damaged structured user entries', async () => {
@@ -199,8 +199,8 @@ describe('Claude slash command visible behavior', () => {
 
     const status = JSON.stringify(lastContent(h.channel));
     expect(status).toContain('lark-cli');
-    expect(status).toContain('user-missing');
-    expect(status).not.toContain('user-ready');
+    expect(status).toContain('缺少用户授权');
+    expect(status).not.toContain('用户身份已就绪');
   });
 
   it('does not report lark-cli user-ready when the profile is user-default but no user is authorized', async () => {
@@ -211,8 +211,8 @@ describe('Claude slash command visible behavior', () => {
 
     const status = JSON.stringify(lastContent(h.channel));
     expect(status).toContain('lark-cli');
-    expect(status).toContain('user-missing');
-    expect(status).not.toContain('user-ready');
+    expect(status).toContain('缺少用户授权');
+    expect(status).not.toContain('用户身份已就绪');
   });
 
   it('does not treat lark-cli display-only no-user text as authorized user state', async () => {
@@ -228,8 +228,8 @@ describe('Claude slash command visible behavior', () => {
 
     const status = JSON.stringify(lastContent(h.channel));
     expect(status).toContain('lark-cli');
-    expect(status).toContain('user-missing');
-    expect(status).not.toContain('user-ready');
+    expect(status).toContain('缺少用户授权');
+    expect(status).not.toContain('用户身份已就绪');
   });
 
   it('handles /timeout display, set, off, default, and invalid values', async () => {

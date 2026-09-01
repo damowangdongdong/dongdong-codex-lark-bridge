@@ -64,13 +64,14 @@ const CODEX_0_151_COMMANDS = [
 describe('Codex slash command registry', () => {
   it('covers every Codex CLI 0.151 command and documented alias', () => {
     const registered = Object.keys(CODEX_SLASH_COMMANDS).filter(
-      (command) => command !== '/permission',
+      (command) => command !== '/permission' && command !== '/profile',
     );
     expect(registered.sort()).toEqual([...CODEX_0_151_COMMANDS].sort());
   });
 
   it('keeps the requested singular permissions alias and rejects unknown commands', () => {
     expect(codexSlashSurface('/permission')).toBe('bridge');
+    expect(codexSlashSurface('/profile')).toBe('bridge');
     expect(codexSlashSurface('/btw')).toBe('attached-tui');
     expect(codexSlashSurface('/clean')).toBe('app-server');
     expect(codexSlashSurface('/does-not-exist')).toBeUndefined();

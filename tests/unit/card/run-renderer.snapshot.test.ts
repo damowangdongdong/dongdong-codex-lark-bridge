@@ -43,6 +43,15 @@ describe('run card renderer snapshots', () => {
     ])).toMatchSnapshot();
   });
 
+  it('keeps user input collapsed in the live card', () => {
+    const rendered = JSON.stringify(renderCard(stateFrom([
+      { type: 'user_text', content: '用户指令' },
+    ])));
+
+    expect(rendered).toContain('输入，点击查看');
+    expect(rendered).toContain('"expanded":false');
+  });
+
   it('collapses consecutive tools while preserving the latest running tool', () => {
     expectCard(stateFrom([
       { type: 'tool_use', id: 'tool-1', name: 'Bash', input: { command: 'pwd' } },

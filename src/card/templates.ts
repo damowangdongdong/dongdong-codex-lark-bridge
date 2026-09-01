@@ -65,6 +65,7 @@ export interface WorkspaceLaunchCardOptions {
   cwd: string;
   profiles: string[];
   configuredProfile?: string;
+  routesToProjectGroup?: boolean;
 }
 
 export function workspaceLaunchCard(options: WorkspaceLaunchCardOptions): object {
@@ -73,8 +74,11 @@ export function workspaceLaunchCard(options: WorkspaceLaunchCardOptions): object
     : '__default__';
   return shell('🚀 选择 Codex 启动方式', [
     divMd(
-      `工作目录已切换到：\`${escapeCode(options.cwd)}\`\n\n` +
-      '请选择 Codex CLI profile，以及要创建新会话还是恢复历史会话。此卡片不会自动启动 Codex。',
+      `已选择工作目录：\`${escapeCode(options.cwd)}\`\n\n` +
+      '请选择 Codex CLI profile，以及要创建新会话还是恢复历史会话。' +
+      (options.routesToProjectGroup
+        ? '继续后会进入该路径的专属项目群；已有群会直接复用。'
+        : '此卡片不会自动启动 Codex。'),
     ),
     {
       tag: 'form',
@@ -103,7 +107,7 @@ export function workspaceLaunchCard(options: WorkspaceLaunchCardOptions): object
           initial_option: 'resume',
           options: [
             { text: { tag: 'plain_text', content: '恢复历史会话' }, value: 'resume' },
-            { text: { tag: 'plain_text', content: '创建新会话' }, value: 'new' },
+            { text: { tag: 'plain_text', content: '创建新 Codex 会话' }, value: 'new' },
           ],
         },
         {
@@ -124,6 +128,7 @@ export interface StatusInfo {
   cwd?: string;
   sessionId?: string;
   emptySessionText?: string;
+  sessionLabel?: string;
   sessionStale: boolean;
   agentName: string;
   runtimeAccess: {
@@ -146,41 +151,49 @@ export interface StatusInfo {
 
 export function statusCard(info: StatusInfo): object {
   const sessionLine = info.sessionId
-    ? `\`${info.sessionId.slice(0, 8)}…\`${info.sessionStale ? ' ⚠️ 旧 cwd，下一条会新建' : ''}`
+    ? `\`${info.sessionId.slice(0, 8)}…\`${info.sessionStale ? ' ⚠️ 旧工作目录，下一条会新建' : ''}`
     : (info.emptySessionText ?? '(无)');
   // For topic groups, surface that the scope is per-topic so the user
   // knows /cd / /new only affect this topic.
   const scopeLine =
     info.chatMode === 'topic'
-      ? `\`${escapeCode(info.scope)}\` _（话题独立 session）_`
+      ? `\`${escapeCode(info.scope)}\` _（话题独立会话）_`
       : `\`${escapeCode(info.scope)}\``;
   const cwdLine = info.cwd ? `\`${escapeCode(info.cwd)}\`` : '(未设置)';
   const queueLine = info.queue
-    ? `${info.queue.active}/${info.queue.cap} active, ${info.queue.waiting} waiting`
-    : 'unknown';
+    ? `运行中 ${info.queue.active}/${info.queue.cap}，等待 ${info.queue.waiting}`
+    : '未知';
+  const larkCliLine = info.larkCliStatus
+    ? {
+        app: '应用身份',
+        'user-ready': '用户身份已就绪',
+        'user-missing': '缺少用户授权',
+        'check-failed': '状态检查失败',
+      }[info.larkCliStatus]
+    : undefined;
   const lines = [
-    `🧭 **scope**: ${scopeLine}`,
-    `🧩 **profile**: ${escapeMd(info.profileName)}`,
-    `📁 **cwd**: ${cwdLine}`,
-    `🔗 **session**: ${sessionLine}`,
-    `🤖 **agent**: ${escapeMd(info.agentName)}`,
-    ...(info.codexProfile ? [`⚙️ **Codex CLI profile**: ${escapeMd(info.codexProfile)}`] : []),
+    `🧭 **对话范围**: ${scopeLine}`,
+    `🧩 **Bridge 配置**: ${escapeMd(info.profileName)}`,
+    `📁 **工作目录**: ${cwdLine}`,
+    `🔗 **${escapeMd(info.sessionLabel ?? '会话')}**: ${sessionLine}`,
+    `🤖 **Agent**: ${escapeMd(info.agentName)}`,
+    ...(info.codexProfile ? [`⚙️ **Codex 配置**: ${escapeMd(info.codexProfile)}`] : []),
     `🛡 **${escapeMd(info.runtimeAccess.label)}**: ${escapeMd(info.runtimeAccess.value)}`,
-    ...(info.codexLaunchState ? [`🚀 **launch**: ${escapeMd(info.codexLaunchState)}`] : []),
-    ...(info.larkCliStatus ? [`🔐 **lark-cli**: ${info.larkCliStatus}`] : []),
-    `🏃 **active run**: ${info.activeRun ? 'yes' : 'no'}`,
+    ...(info.codexLaunchState ? [`🚀 **会话方式**: ${escapeMd(info.codexLaunchState)}`] : []),
+    ...(larkCliLine ? [`🔐 **lark-cli 身份**: ${larkCliLine}`] : []),
+    `🏃 **当前任务**: ${info.activeRun ? '运行中' : '无'}`,
     ...(info.activeScopes && info.activeScopes.length > 0
       ? [
-          `🏃 **active scopes**: ${info.activeScopes.map((scope) => `\`${escapeCode(scope)}\``).join(', ')}`,
+          `🏃 **运行中的范围**: ${info.activeScopes.map((scope) => `\`${escapeCode(scope)}\``).join(', ')}`,
         ]
       : []),
     ...(info.activeCommentScopes && info.activeCommentScopes.length > 0
       ? [
-          `📝 **comment runs**: ${info.activeCommentScopes.map((scope) => `\`${escapeCode(scope)}\``).join(', ')}`,
+          `📝 **文档评论任务**: ${info.activeCommentScopes.map((scope) => `\`${escapeCode(scope)}\``).join(', ')}`,
         ]
       : []),
-    `🚦 **queue**: ${queueLine}`,
-    `👤 **owner API**: ${escapeMd(info.ownerState)}`,
+    `🚦 **队列**: ${queueLine}`,
+    `👤 **管理员身份**: ${escapeMd(info.ownerState)}`,
   ];
   return shell('📊 当前状态', [
     divMd(lines.join('\n')),
@@ -273,6 +286,7 @@ export function helpCard(agentName = 'Agent'): object {
         '- `/ws list|save <name>|use <name>|remove <name>` — 工作目录',
         ...(codex
           ? [
+              '- `/profile` — 在当前项目群重新选择 Codex profile 与新建/恢复会话',
               '- `/permissions` — 查看或持久化本 scope 的 Codex 权限',
               '- `/attach` — 在本机终端附着当前 Codex thread',
               '- 运行卡片：`↵ 立即插入` 对应 Enter；`⇥ 排队` 对应 Tab',

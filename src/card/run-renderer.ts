@@ -47,8 +47,8 @@ export function renderCard(state: RunState, options: RunCardRenderOptions = {}):
       }
     } else if (group.kind === 'user') {
       elements.push(collapsiblePanel({
-        title: '👤 **终端输入**',
-        expanded: true,
+        title: '👤 **输入，点击查看**',
+        expanded: false,
         border: 'blue',
         body: group.content,
       }));
