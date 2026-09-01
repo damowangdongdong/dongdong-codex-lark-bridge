@@ -245,6 +245,75 @@ describe('agent-aware resume commands', () => {
     expect(historyCard).toContain('historic answer');
   });
 
+  it('hides Codex threads occupied by another identity while keeping free history', async () => {
+    const h = await createHarness('codex');
+    h.codexHistory.push(
+      codexThread('thread-busy', 'busy prompt', 1_700_000_100_000),
+      codexThread('thread-free', 'free prompt', 1_700_000_000_000),
+    );
+    h.catalog.upsertActive({
+      ...h.identity,
+      scopeId: 'chat-2',
+      policyFingerprint: 'other-profile-fingerprint',
+      threadId: 'thread-busy',
+      now: 1000,
+    });
+
+    await expect(h.run('/resume')).resolves.toBe(true);
+
+    const rendered = lastContentString(h.channel);
+    expect(rendered).not.toContain('busy prompt');
+    expect(rendered).toContain('free prompt');
+    expect(resumeArgsFromCard(lastContent(h.channel))).toHaveLength(1);
+  });
+
+  it('keeps the current identity own Codex thread available for resume', async () => {
+    const h = await createHarness('codex');
+    h.codexHistory.push(codexThread('thread-current', 'current prompt', 1_700_000_100_000));
+    h.catalog.upsertActive({ ...h.identity, threadId: 'thread-current', now: 1000 });
+
+    await expect(h.run('/resume')).resolves.toBe(true);
+
+    expect(lastContentString(h.channel)).toContain('current prompt');
+    expect(resumeArgsFromCard(lastContent(h.channel))).toHaveLength(1);
+  });
+
+  it('rejects a Codex resume candidate that another identity occupies after listing', async () => {
+    const h = await createHarness('codex');
+    h.codexHistory.push(codexThread('thread-raced', 'race prompt', 1_700_000_100_000));
+    await expect(h.run('/resume')).resolves.toBe(true);
+    const [nonce] = resumeArgsFromCard(lastContent(h.channel));
+    h.catalog.upsertActive({
+      ...h.identity,
+      scopeId: 'chat-2',
+      policyFingerprint: 'other-profile-fingerprint',
+      threadId: 'thread-raced',
+      now: 1000,
+    });
+
+    await expect(h.run(`/resume use ${nonce}`)).resolves.toBe(true);
+
+    expect(h.catalog.activeFor(h.identity)).toBeUndefined();
+    expect(lastMarkdown(h.channel)).toContain('正由其他会话或 profile 使用');
+  });
+
+  it('does not offer a catalog fallback thread occupied by another identity', async () => {
+    const h = await createHarness('codex');
+    h.catalog.upsertActive({ ...h.identity, threadId: 'thread-shared', now: 1000 });
+    h.catalog.upsertActive({
+      ...h.identity,
+      scopeId: 'chat-2',
+      policyFingerprint: 'other-profile-fingerprint',
+      threadId: 'thread-shared',
+      now: 1000,
+    });
+
+    await expect(h.run('/resume')).resolves.toBe(true);
+
+    expect(lastContentString(h.channel)).toContain('此 cwd 下没有历史会话');
+    expect(lastContentString(h.channel)).not.toContain('/resume use');
+  });
+
   it('resumes a Codex history selection from the card button callback', async () => {
     const h = await createHarness('codex');
     h.codexHistory.push(codexThread('thread-alpha-secret', 'alpha prompt', 1_700_000_100_000));

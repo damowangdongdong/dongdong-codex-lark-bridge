@@ -1620,7 +1620,15 @@ async function handleResume(args: string, ctx: CommandContext): Promise<void> {
       ctx.sessionCatalog && identity
         ? ctx.sessionCatalog.activeFor(identity)
         : undefined;
-    const history = identity ? await listCodexResumeHistory(ctx, cwd, limit) : [];
+    const history = identity
+      ? (await listCodexResumeHistory(ctx, cwd, limit)).filter(
+          (thread) => !isCodexThreadOccupiedByOtherIdentity(
+            ctx.sessionCatalog,
+            identity,
+            thread.threadId,
+          ),
+        )
+      : [];
     if (history.length > 0 && identity) {
       const entries = history.map((thread) => {
         const nonce = issueResumeCandidate(identity, { threadId: thread.threadId });
@@ -1636,7 +1644,11 @@ async function handleResume(args: string, ctx: CommandContext): Promise<void> {
       await ctx.channel.send(ctx.msg.chatId, { card }, commandReplyOptions(ctx));
       return;
     }
-    if (entry?.threadId && identity) {
+    if (
+      entry?.threadId
+      && identity
+      && !isCodexThreadOccupiedByOtherIdentity(ctx.sessionCatalog, identity, entry.threadId)
+    ) {
       const nonce = issueResumeCandidate(identity, { threadId: entry.threadId });
       await reply(
         ctx,
@@ -1671,9 +1683,17 @@ async function applyResume(sessionId: string, ctx: CommandContext): Promise<void
     const entry = ctx.sessionCatalog.activeFor(ctx.sessionCatalogIdentity);
     const resolved = consumeResumeCandidate(sessionId, ctx.sessionCatalogIdentity);
     if (resolved) {
-      ctx.activeRuns.interrupt(ctx.scope);
       if (ctx.sessionCatalogIdentity.agentId === 'codex') {
         const threadId = resolved.threadId!;
+        if (isCodexThreadOccupiedByOtherIdentity(
+          ctx.sessionCatalog,
+          ctx.sessionCatalogIdentity,
+          threadId,
+        )) {
+          await reply(ctx, '该 Codex thread 正由其他会话或 profile 使用，请重新选择。');
+          return;
+        }
+        ctx.activeRuns.interrupt(ctx.scope);
         ctx.sessionCatalog.upsertActive({
           scopeId: ctx.sessionCatalogIdentity.scopeId,
           agentId: 'codex',
@@ -1687,6 +1707,7 @@ async function applyResume(sessionId: string, ctx: CommandContext): Promise<void
         await sendCodexResumeHistory(ctx, threadId, ctx.sessionCatalogIdentity.cwdRealpath);
         return;
       } else {
+        ctx.activeRuns.interrupt(ctx.scope);
         ctx.sessionCatalog.upsertActive({
           scopeId: ctx.sessionCatalogIdentity.scopeId,
           agentId: 'claude',
@@ -1729,6 +1750,24 @@ async function applyResume(sessionId: string, ctx: CommandContext): Promise<void
   ctx.activeRuns.interrupt(ctx.scope);
   ctx.sessions.set(ctx.scope, sessionId, cwd);
   await reply(ctx, RESUME_APPLIED_REPLY);
+}
+
+function isCodexThreadOccupiedByOtherIdentity(
+  catalog: SessionCatalog | undefined,
+  identity: SessionCatalogIdentity,
+  threadId: string,
+): boolean {
+  if (!catalog) return false;
+  return catalog.entries().some((entry) =>
+    entry.status === 'active'
+    && entry.agentId === 'codex'
+    && entry.threadId === threadId
+    && (
+      entry.scopeId !== identity.scopeId
+      || entry.cwdRealpath !== identity.cwdRealpath
+      || entry.policyFingerprint !== identity.policyFingerprint
+    ),
+  );
 }
 
 async function sendCodexResumeHistory(
