@@ -1,5 +1,5 @@
 import { maskEmails } from './mask-email';
-import type { Block, RunState, ToolEntry } from './run-state';
+import type { Block, NoticeEntry, RunState, ToolEntry } from './run-state';
 import { toolHeaderText } from './tool-render';
 
 /**
@@ -42,7 +42,26 @@ function renderBlock(block: Block): string {
     return block.content.trim();
   }
   if (block.kind === 'user') return `> 👤 **终端输入**\n> ${block.content.trim()}`;
+  if (block.kind === 'notice') return renderNoticeText(block.notice);
   return toolLine(block.tool);
+}
+
+export function renderNoticeText(notice: NoticeEntry): string {
+  const retryCount = notice.attempt !== undefined && notice.maxAttempts !== undefined
+    ? ` ${notice.attempt}/${notice.maxAttempts}`
+    : '';
+  const title = notice.level === 'retry'
+    ? `🔄 **Codex 正在重试${retryCount}**`
+    : notice.level === 'recovered'
+      ? '✅ **Codex 已恢复**'
+      : notice.level === 'warning'
+        ? '⚠️ **Codex 提示**'
+        : '🚨 **Codex 错误**';
+  const lines = notice.message.trim().split('\n').map((line) => `> ${line}`);
+  if (notice.delaySeconds !== undefined) {
+    lines.push(`> _等待 ${notice.delaySeconds} 秒后重试_`);
+  }
+  return `> ${title}\n${lines.join('\n')}`;
 }
 
 /**

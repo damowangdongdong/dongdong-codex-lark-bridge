@@ -64,6 +64,7 @@ import { commandSessionCatalogIdentity } from './session-catalog-identity';
 import { startKeepalive } from './keepalive';
 import { PendingQueue } from './pending-queue';
 import { ProcessPool } from './process-pool';
+import { buildProxyAwareTransportOptions } from './proxy';
 import { fetchQuotedContext, fetchTopicContext, type QuotedContext } from './quote';
 import { lookupMessageThreadId } from './thread-id';
 import { addWorkingReaction, removeReaction } from './reaction';
@@ -263,11 +264,9 @@ export async function startChannel(deps: StartChannelDeps): Promise<BridgeChanne
     // 8s handshake timeout (replaces hardcoded 15s). Fast-fail + fast-retry
     // beats slow-fail in unstable networks.
     handshakeTimeoutMs: 8_000,
-    // Per-request REST timeout — without a cap a slow API can hang the
-    // event-handling thread.
-    httpTimeoutMs: 30_000,
-    // Route WS + REST through HTTPS_PROXY / HTTP_PROXY when set (no-op otherwise).
-    respectProxyEnv: true,
+    // Route WS + REST through HTTPS_PROXY / HTTP_PROXY when set. The helper
+    // also prevents Axios from applying the same proxy a second time.
+    ...buildProxyAwareTransportOptions(),
   };
 
   const channel = createLarkChannel(opts);

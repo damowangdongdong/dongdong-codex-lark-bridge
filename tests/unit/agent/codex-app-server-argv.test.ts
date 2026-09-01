@@ -4,7 +4,6 @@ import { buildCodexAppServerArgs } from '../../../src/agent/codex/app-server-arg
 describe('Codex app-server argv contract', () => {
   it('starts the default Codex configuration without a profile flag', () => {
     expect(buildCodexAppServerArgs({ endpoint: 'unix:///tmp/codex.sock' })).toEqual([
-      '--ignore-rules',
       '-c',
       'shell_environment_policy.inherit="all"',
       'app-server',
@@ -13,16 +12,8 @@ describe('Codex app-server argv contract', () => {
     ]);
   });
 
-  it('puts a selected profile before the app-server subcommand', () => {
-    expect(
-      buildCodexAppServerArgs({
-        endpoint: 'ws://127.0.0.1:4500',
-        profile: 'freerouter',
-      }),
-    ).toEqual([
-      '--profile',
-      'freerouter',
-      '--ignore-rules',
+  it('starts app-server without the runtime-only profile flag', () => {
+    expect(buildCodexAppServerArgs({ endpoint: 'ws://127.0.0.1:4500' })).toEqual([
       '-c',
       'shell_environment_policy.inherit="all"',
       'app-server',
@@ -31,13 +22,4 @@ describe('Codex app-server argv contract', () => {
     ]);
   });
 
-  it('rejects mutually exclusive profile and isolated user config', () => {
-    expect(() =>
-      buildCodexAppServerArgs({
-        endpoint: 'unix:///tmp/codex.sock',
-        profile: 'freerouter',
-        ignoreUserConfig: true,
-      }),
-    ).toThrow(/profile.*ignore-user-config/);
-  });
 });

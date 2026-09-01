@@ -138,6 +138,7 @@ If a profile was created with the wrong agent kind, stop or unregister any match
 | Command | Effect |
 |---|---|
 | `/new`, `/clear`, `/reset` | Clear the current session |
+| `/new chat [name]` | Create a separate Feishu/Lark group for the current path; inherit Codex profile/access and start a fresh thread |
 | `/cd <path>` | Switch working directory; Codex then asks for a CLI profile and new/resume mode |
 | `/ws list` | List named workspaces |
 | `/ws save <name>` | Save the current working directory as a named workspace |

@@ -179,8 +179,10 @@ function spawnCodexAppServer(options: ListCodexThreadHistoryOptions): CodexAppSe
     envOverrides.CODEX_HOME = join(options.profileStateDir, 'codex-home');
   }
 
+  // Codex 0.151 does not accept `--profile` when launching app-server. History
+  // is read from the shared state DB and filtered by cwd; the selected profile
+  // is applied later when the chosen thread is resumed.
   return spawnProcess(options.binary, [
-    ...(options.profile ? ['--profile', options.profile] : []),
     'app-server',
     '--listen',
     'stdio://',

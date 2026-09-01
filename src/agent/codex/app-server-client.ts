@@ -145,7 +145,7 @@ export class CodexAppServerClient {
   private async startInner(): Promise<void> {
     this.closing = false;
     await mkdir(this.options.profileStateDir, { recursive: true });
-    const transport = await createTransport(this.options.profileStateDir, this.options.profile);
+    const transport = await createTransport();
     this.endpointValue = transport.endpoint;
     this.websocketUrl = transport.websocketUrl;
 
@@ -157,9 +157,6 @@ export class CodexAppServerClient {
     }
     const args = buildCodexAppServerArgs({
       endpoint: transport.endpoint,
-      profile: this.options.profile,
-      ignoreUserConfig: this.options.ignoreUserConfig,
-      ignoreRules: this.options.ignoreRules,
     });
     const child = spawnProcess(this.options.binary, args, {
       env: mergeProcessEnv(mergeProcessEnv(process.env, this.options.env), envOverrides),
@@ -274,25 +271,10 @@ export class CodexAppServerClient {
   }
 }
 
-async function createTransport(
-  profileStateDir: string,
-  profile: string | undefined,
-): Promise<{ endpoint: string; websocketUrl: string }> {
-  if (process.platform !== 'win32') {
-    const suffix = sanitizeProfile(profile ?? 'default');
-    const socketPath = join(profileStateDir, `codex-${suffix}-${process.pid}.sock`);
-    return {
-      endpoint: `unix://${socketPath}`,
-      websocketUrl: `ws+unix://${socketPath}:/`,
-    };
-  }
+async function createTransport(): Promise<{ endpoint: string; websocketUrl: string }> {
   const port = await reserveTcpPort();
   const endpoint = `ws://127.0.0.1:${port}`;
   return { endpoint, websocketUrl: endpoint };
-}
-
-function sanitizeProfile(value: string): string {
-  return value.replace(/[^A-Za-z0-9_.-]+/g, '-').slice(0, 32) || 'default';
 }
 
 async function reserveTcpPort(): Promise<number> {

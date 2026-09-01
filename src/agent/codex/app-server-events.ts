@@ -13,7 +13,10 @@ export class CodexAppServerEventTranslator {
   private turnId: string | undefined;
   private readonly items = new Map<string, ItemState>();
   private latestUsage: AgentEvent | undefined;
+  private latestTurnDiff: string | undefined;
+  private readonly patchSnapshots = new Map<string, string>();
   private terminal = false;
+  private retrying = false;
 
   constructor(threadId: string) {
     this.threadId = threadId;
@@ -26,7 +29,9 @@ export class CodexAppServerEventTranslator {
   translate(notification: RpcNotification): AgentEvent[] {
     if (this.terminal) return [];
     const params = recordValue(notification.params);
-    if (!params || stringValue(params.threadId) !== this.threadId) return [];
+    if (!params) return [];
+    const paramsThreadId = stringValue(params.threadId);
+    if (paramsThreadId && paramsThreadId !== this.threadId) return [];
     const notificationTurnId = stringValue(params.turnId) ?? stringValue(recordValue(params.turn)?.id);
     if (this.turnId && notificationTurnId && notificationTurnId !== this.turnId) return [];
 
@@ -35,35 +40,97 @@ export class CodexAppServerEventTranslator {
         if (notificationTurnId) this.turnId = notificationTurnId;
         return [];
       case 'item/started':
-        return this.itemStarted(recordValue(params.item));
+        return this.withRecovery(this.itemStarted(recordValue(params.item)));
       case 'item/agentMessage/delta':
-        return this.agentMessageDelta(params);
+        return this.withRecovery(this.agentMessageDelta(params));
       case 'item/reasoning/summaryTextDelta':
       case 'item/reasoning/textDelta':
-        return this.thinkingDelta(params, 'reasoning');
+        return this.withRecovery(this.thinkingDelta(params, 'reasoning'));
       case 'item/plan/delta':
-        return this.thinkingDelta(params, 'plan');
+        return this.withRecovery(this.thinkingDelta(params, 'plan'));
       case 'item/commandExecution/outputDelta': {
         const id = stringValue(params.itemId);
         const delta = stringValue(params.delta);
-        return id && delta ? [{ type: 'tool_progress', id, delta }] : [];
+        return this.withRecovery(id && delta ? [{ type: 'tool_progress', id, delta }] : []);
       }
+      case 'item/commandExecution/terminalInteraction': {
+        const stdin = stringValue(params.stdin);
+        return this.withRecovery(stdin ? [{ type: 'user_text', content: stdin }] : []);
+      }
+      case 'item/fileChange/outputDelta': {
+        const id = stringValue(params.itemId);
+        const delta = stringValue(params.delta);
+        return this.withRecovery(id && delta ? [{ type: 'tool_progress', id, delta }] : []);
+      }
+      case 'item/fileChange/patchUpdated':
+        return this.withRecovery(this.fileChangePatchUpdated(params));
       case 'item/mcpToolCall/progress': {
         const id = stringValue(params.itemId);
         const message = stringValue(params.message);
-        return id && message ? [{ type: 'tool_progress', id, delta: `${message}\n` }] : [];
+        return this.withRecovery(
+          id && message ? [{ type: 'tool_progress', id, delta: `${message}\n` }] : [],
+        );
       }
       case 'item/completed':
-        return this.itemCompleted(recordValue(params.item));
+        return this.withRecovery(this.itemCompleted(recordValue(params.item)));
       case 'thread/tokenUsage/updated':
         this.captureUsage(params);
         return [];
+      case 'turn/plan/updated':
+        return this.withRecovery(turnPlanUpdate(params));
+      case 'turn/diff/updated':
+        return this.withRecovery(this.turnDiffUpdated(params));
+      case 'item/autoApprovalReview/started':
+        return this.withRecovery(this.autoApprovalStarted(params));
+      case 'item/autoApprovalReview/completed':
+        return this.withRecovery(this.autoApprovalCompleted(params));
+      case 'warning':
+        return [{
+          type: 'notice',
+          level: 'warning',
+          message: stringValue(params.message) ?? 'Codex warning',
+        }];
+      case 'configWarning':
+        return [{
+          type: 'notice',
+          level: 'warning',
+          message: [stringValue(params.summary), stringValue(params.details)]
+            .filter(Boolean)
+            .join('\n') || 'Codex configuration warning',
+        }];
+      case 'model/rerouted':
+        return [{
+          type: 'notice',
+          level: 'warning',
+          message: `Codex model rerouted: ${stringValue(params.fromModel) ?? '?'} → ${stringValue(params.toModel) ?? '?'} (${stringValue(params.reason) ?? 'unspecified'})`,
+        }];
+      case 'model/safetyBuffering/updated':
+        if (params.showBufferingUi !== true) return [];
+        return [{
+          type: 'notice',
+          level: 'warning',
+          message: [
+            `Codex is buffering model ${stringValue(params.model) ?? '?'}.`,
+            listText(params.reasons),
+            stringValue(params.fasterModel)
+              ? `Faster model available: ${stringValue(params.fasterModel)}`
+              : '',
+          ].filter(Boolean).join('\n'),
+        }];
+      case 'model/verification':
+        return [{
+          type: 'notice',
+          level: 'warning',
+          message: `Codex requires verification: ${listText(params.verifications) || 'unknown verification'}`,
+        }];
       case 'error': {
         const message = errorMessage(params, 'Codex app-server error');
-        return [{ type: 'text', delta: `\n⚠️ ${message}\n` }];
+        const notice = codexErrorNotice(message, params.willRetry === true);
+        if (notice.level === 'retry') this.retrying = true;
+        return [notice];
       }
       case 'turn/completed':
-        return this.turnCompleted(recordValue(params.turn));
+        return this.withRecovery(this.turnCompleted(recordValue(params.turn)));
       default:
         return [];
     }
@@ -79,6 +146,27 @@ export class CodexAppServerEventTranslator {
     if (this.terminal) return [];
     this.terminal = true;
     return [{ type: 'done', threadId: this.threadId, terminationReason: 'interrupted' }];
+  }
+
+  private withRecovery(events: AgentEvent[]): AgentEvent[] {
+    if (!this.retrying || events.length === 0 || events.some((event) => event.type === 'error')) {
+      return events;
+    }
+    const progressed = events.some((event) =>
+      event.type === 'thinking'
+      || event.type === 'text'
+      || event.type === 'final_text'
+      || event.type === 'tool_use'
+      || event.type === 'tool_progress'
+      || event.type === 'tool_result'
+      || (event.type === 'done' && event.terminationReason === 'normal'),
+    );
+    if (!progressed) return events;
+    this.retrying = false;
+    return [
+      { type: 'notice', level: 'recovered', message: 'Codex 连接已恢复，正在继续运行。' },
+      ...events,
+    ];
   }
 
   private itemStarted(item: Record<string, unknown> | undefined): AgentEvent[] {
@@ -134,6 +222,7 @@ export class CodexAppServerEventTranslator {
     if (!id || !type) return [];
     const previous = this.items.get(id);
     this.items.delete(id);
+    this.patchSnapshots.delete(id);
     if (type === 'agentMessage') {
       const text = stringValue(item.text) ?? previous?.emittedText ?? '';
       const phase = stringValue(item.phase) ?? previous?.phase;
@@ -181,6 +270,14 @@ export class CodexAppServerEventTranslator {
     this.terminal = true;
     const status = stringValue(turn.status);
     const events: AgentEvent[] = [];
+    if (this.latestTurnDiff !== undefined) {
+      events.push({
+        type: 'tool_result',
+        id: 'codex-turn-diff',
+        output: this.latestTurnDiff,
+        isError: false,
+      });
+    }
     if (this.latestUsage) events.push(this.latestUsage);
     if (status === 'failed') {
       const error = recordValue(turn.error);
@@ -198,6 +295,100 @@ export class CodexAppServerEventTranslator {
     });
     return events;
   }
+
+  private fileChangePatchUpdated(params: Record<string, unknown>): AgentEvent[] {
+    const id = stringValue(params.itemId);
+    if (!id || !Array.isArray(params.changes)) return [];
+    const snapshot = stringify(params.changes);
+    if (this.patchSnapshots.get(id) === snapshot) return [];
+    this.patchSnapshots.set(id, snapshot);
+    return [{ type: 'tool_progress', id, delta: `Patch updated:\n${snapshot}\n` }];
+  }
+
+  private turnDiffUpdated(params: Record<string, unknown>): AgentEvent[] {
+    const diff = stringValue(params.diff);
+    if (!diff || diff === this.latestTurnDiff) return [];
+    const previous = this.latestTurnDiff ?? '';
+    this.latestTurnDiff = diff;
+    const delta = previous && diff.startsWith(previous)
+      ? diff.slice(previous.length)
+      : previous
+        ? `\n\nUpdated diff snapshot:\n${diff}`
+        : diff;
+    return [
+      ...(previous ? [] : [{
+        type: 'tool_use' as const,
+        id: 'codex-turn-diff',
+        name: 'turn_diff',
+        input: {},
+      }]),
+      ...(delta ? [{ type: 'tool_progress' as const, id: 'codex-turn-diff', delta }] : []),
+    ];
+  }
+
+  private autoApprovalStarted(params: Record<string, unknown>): AgentEvent[] {
+    const reviewId = stringValue(params.reviewId);
+    if (!reviewId) return [];
+    return [{
+      type: 'tool_use',
+      id: `auto-approval:${reviewId}`,
+      name: 'approval.auto_review',
+      input: {
+        action: params.action ?? {},
+        review: params.review ?? {},
+      },
+    }];
+  }
+
+  private autoApprovalCompleted(params: Record<string, unknown>): AgentEvent[] {
+    const reviewId = stringValue(params.reviewId);
+    if (!reviewId) return [];
+    const review = recordValue(params.review);
+    const status = stringValue(review?.status);
+    return [{
+      type: 'tool_result',
+      id: `auto-approval:${reviewId}`,
+      output: stringify({
+        review: params.review ?? {},
+        decisionSource: params.decisionSource ?? null,
+      }),
+      isError: status !== 'approved',
+    }];
+  }
+}
+
+function turnPlanUpdate(params: Record<string, unknown>): AgentEvent[] {
+  const steps = Array.isArray(params.plan) ? params.plan : [];
+  const rendered = steps
+    .map(recordValue)
+    .filter((step): step is Record<string, unknown> => Boolean(step))
+    .map((step) => {
+      const status = stringValue(step.status);
+      const marker = status === 'completed' ? '✓' : status === 'inProgress' ? '→' : '·';
+      return `${marker} ${stringValue(step.step) ?? ''}`.trimEnd();
+    })
+    .filter(Boolean);
+  const explanation = stringValue(params.explanation);
+  const content = [explanation, ...rendered].filter(Boolean).join('\n');
+  return content ? [{ type: 'thinking', delta: `\n\nPlan update:\n${content}` }] : [];
+}
+
+function codexErrorNotice(
+  message: string,
+  willRetry: boolean,
+): Extract<AgentEvent, { type: 'notice' }> {
+  const retry = message.match(/(?:Reconnecting|Retrying)(?:\.\.\.|…)?\s*(\d+)\s*\/\s*(\d+)(?:\s*\(([^)]*)\))?/i);
+  if (!retry) return { type: 'notice', level: willRetry ? 'retry' : 'error', message };
+  const details = retry[3] ?? '';
+  const delay = details.match(/(?:^|[\s•·])([0-9]+(?:\.[0-9]+)?)s(?:\s|$|[•·])/i);
+  return {
+    type: 'notice',
+    level: 'retry',
+    message,
+    attempt: Number(retry[1]),
+    maxAttempts: Number(retry[2]),
+    ...(delay ? { delaySeconds: Number(delay[1]) } : {}),
+  };
 }
 
 function userMessageText(item: Record<string, unknown>): string {
@@ -360,7 +551,29 @@ function functionOutputText(output: unknown): string {
 
 function errorMessage(input: Record<string, unknown> | undefined, fallback: string): string {
   if (!input) return fallback;
-  return stringValue(input.message) ?? stringValue(recordValue(input.error)?.message) ?? fallback;
+  const error = recordValue(input.error) ?? input;
+  const message = stringValue(error.message) ?? fallback;
+  const details = stringValue(error.additionalDetails);
+  const info = codexErrorInfo(error.codexErrorInfo);
+  return [message, details, info].filter((value, index, values) =>
+    Boolean(value) && values.indexOf(value) === index
+  ).join('\n');
+}
+
+function codexErrorInfo(value: unknown): string | undefined {
+  if (typeof value === 'string') return `Codex error: ${value}`;
+  const record = recordValue(value);
+  if (!record) return undefined;
+  const [kind, detail] = Object.entries(record)[0] ?? [];
+  if (!kind) return undefined;
+  const status = numberValue(recordValue(detail)?.httpStatusCode);
+  return `Codex error: ${kind}${status === undefined ? '' : ` (HTTP ${status})`}`;
+}
+
+function listText(value: unknown): string {
+  return Array.isArray(value)
+    ? value.filter((entry): entry is string => typeof entry === 'string').join(', ')
+    : '';
 }
 
 function stringify(value: unknown): string {

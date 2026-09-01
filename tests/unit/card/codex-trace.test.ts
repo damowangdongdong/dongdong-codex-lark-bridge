@@ -33,6 +33,7 @@ describe('Codex trace cards', () => {
     expect(rendered).toContain('Token usage');
     expect(rendered).toContain('--profile freerouter');
     expect(rendered).toContain('thread-1');
+    expect(rendered).toContain('"expanded":false');
   });
 
   it('paginates long tool output without dropping its beginning or end', () => {
@@ -99,6 +100,28 @@ describe('Codex resumed-history cards', () => {
     expect(rendered).toContain('answer-');
     expect(rendered).toContain('-end');
     expect(rendered).toContain('thread-history');
+    expect(rendered).toContain('"expanded":false');
+  });
+
+  it('keeps retry and capacity errors visible in the full trace', () => {
+    const state = stateFrom([
+      {
+        type: 'notice',
+        level: 'retry',
+        message: 'selected model is at capacity. Retrying 2/5 (3s)',
+        attempt: 2,
+        maxAttempts: 5,
+        delaySeconds: 3,
+      },
+      { type: 'notice', level: 'recovered', message: 'Codex connection recovered.' },
+      { type: 'done', terminationReason: 'normal' },
+    ]);
+
+    const rendered = JSON.stringify(renderRunTraceCards(state, { sandbox: 'workspace-write' }));
+    expect(rendered).toContain('selected model is at capacity');
+    expect(rendered).toContain('Codex retry 2/5');
+    expect(rendered).toContain('等待 3 秒后重试');
+    expect(rendered).toContain('Codex recovered');
   });
 });
 

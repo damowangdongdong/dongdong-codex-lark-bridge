@@ -41,6 +41,7 @@ describe('Codex thread history provider', () => {
       cwd: '/repo',
       limit: 2,
       profileStateDir: fake.dir,
+      profile: 'freerouter',
       timeoutMs: 5000,
     });
 

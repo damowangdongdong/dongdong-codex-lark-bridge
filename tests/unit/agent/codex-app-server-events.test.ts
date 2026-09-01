@@ -246,6 +246,98 @@ describe('Codex app-server event translator', () => {
     ]);
   });
 
+  it('streams terminal input, file patches, approval reviews, and turn diffs', () => {
+    const translator = new CodexAppServerEventTranslator('thread-1');
+    translator.setTurnId('turn-1');
+    const changes = [{ path: '/repo/a.ts', kind: { type: 'update' } }];
+
+    expect(
+      translateAll(translator, [
+        notification('item/started', {
+          item: { id: 'command', type: 'commandExecution', command: 'read answer' },
+        }),
+        notification('item/commandExecution/terminalInteraction', {
+          itemId: 'command',
+          processId: '7',
+          stdin: 'yes\n',
+        }),
+        notification('item/started', {
+          item: { id: 'patch', type: 'fileChange', changes: [] },
+        }),
+        notification('item/fileChange/patchUpdated', { itemId: 'patch', changes }),
+        notification('item/fileChange/outputDelta', { itemId: 'patch', delta: 'applying\n' }),
+        notification('item/completed', {
+          item: { id: 'patch', type: 'fileChange', changes, status: 'completed' },
+        }),
+        notification('item/autoApprovalReview/started', {
+          reviewId: 'review-1',
+          action: { type: 'command', command: 'pnpm test', cwd: '/repo', source: 'shell' },
+          review: { status: 'inProgress' },
+        }),
+        notification('item/autoApprovalReview/completed', {
+          reviewId: 'review-1',
+          action: { type: 'command', command: 'pnpm test', cwd: '/repo', source: 'shell' },
+          review: { status: 'approved', rationale: 'safe' },
+          decisionSource: 'agent',
+        }),
+        notification('turn/diff/updated', { diff: 'diff --git a/a.ts b/a.ts\n+ok\n' }),
+        notification('turn/completed', { turn: { id: 'turn-1', status: 'completed' } }),
+      ]),
+    ).toEqual([
+      {
+        type: 'tool_use',
+        id: 'command',
+        name: 'command_execution',
+        input: { command: 'read answer', cwd: '' },
+      },
+      { type: 'user_text', content: 'yes\n' },
+      { type: 'tool_use', id: 'patch', name: 'file_change', input: [] },
+      {
+        type: 'tool_progress',
+        id: 'patch',
+        delta: `Patch updated:\n${JSON.stringify(changes, null, 2)}\n`,
+      },
+      { type: 'tool_progress', id: 'patch', delta: 'applying\n' },
+      {
+        type: 'tool_result',
+        id: 'patch',
+        output: JSON.stringify(changes, null, 2),
+        isError: false,
+      },
+      {
+        type: 'tool_use',
+        id: 'auto-approval:review-1',
+        name: 'approval.auto_review',
+        input: {
+          action: { type: 'command', command: 'pnpm test', cwd: '/repo', source: 'shell' },
+          review: { status: 'inProgress' },
+        },
+      },
+      {
+        type: 'tool_result',
+        id: 'auto-approval:review-1',
+        output: JSON.stringify({
+          review: { status: 'approved', rationale: 'safe' },
+          decisionSource: 'agent',
+        }, null, 2),
+        isError: false,
+      },
+      { type: 'tool_use', id: 'codex-turn-diff', name: 'turn_diff', input: {} },
+      {
+        type: 'tool_progress',
+        id: 'codex-turn-diff',
+        delta: 'diff --git a/a.ts b/a.ts\n+ok\n',
+      },
+      {
+        type: 'tool_result',
+        id: 'codex-turn-diff',
+        output: 'diff --git a/a.ts b/a.ts\n+ok\n',
+        isError: false,
+      },
+      { type: 'done', threadId: 'thread-1', terminationReason: 'normal' },
+    ]);
+  });
+
   it('uses completed plan and reasoning items when deltas are absent or differ', () => {
     const translator = new CodexAppServerEventTranslator('thread-1');
     translator.setTurnId('turn-1');
@@ -266,6 +358,99 @@ describe('Codex app-server event translator', () => {
       { type: 'thinking', delta: 'Inspect tests\nThen patch' },
       { type: 'thinking', delta: 'Old plan' },
       { type: 'thinking', delta: '\n\nFinal plan:\nRevised plan' },
+    ]);
+  });
+
+  it('uses willRetry and preserves structured capacity error details', () => {
+    const translator = new CodexAppServerEventTranslator('thread-1');
+    translator.setTurnId('turn-1');
+
+    expect(
+      translateAll(translator, [
+        notification('error', {
+          error: {
+            message: 'selected model is at capacity',
+            additionalDetails: 'Try another model if this continues.',
+            codexErrorInfo: 'serverOverloaded',
+          },
+          willRetry: true,
+        }),
+        notification('item/reasoning/summaryTextDelta', {
+          itemId: 'reasoning',
+          delta: 'Continuing after retry',
+        }),
+      ]),
+    ).toEqual([
+      {
+        type: 'notice',
+        level: 'retry',
+        message: 'selected model is at capacity\nTry another model if this continues.\nCodex error: serverOverloaded',
+      },
+      { type: 'notice', level: 'recovered', message: 'Codex 连接已恢复，正在继续运行。' },
+      { type: 'thinking', delta: 'Continuing after retry' },
+    ]);
+  });
+
+  it('shows non-retrying structured errors with their HTTP status', () => {
+    const translator = new CodexAppServerEventTranslator('thread-1');
+    translator.setTurnId('turn-1');
+
+    expect(translateAll(translator, [notification('error', {
+      error: {
+        message: 'provider unavailable',
+        codexErrorInfo: { httpConnectionFailed: { httpStatusCode: 503 } },
+      },
+      willRetry: false,
+    })])).toEqual([{
+      type: 'notice',
+      level: 'error',
+      message: 'provider unavailable\nCodex error: httpConnectionFailed (HTTP 503)',
+    }]);
+  });
+
+  it('keeps plan updates and model runtime notices visible', () => {
+    const translator = new CodexAppServerEventTranslator('thread-1');
+    translator.setTurnId('turn-1');
+
+    expect(translateAll(translator, [
+      notification('turn/plan/updated', {
+        explanation: 'Execution order',
+        plan: [
+          { step: 'Inspect', status: 'completed' },
+          { step: 'Patch', status: 'inProgress' },
+        ],
+      }),
+      notification('model/rerouted', {
+        fromModel: 'model-a',
+        toModel: 'model-b',
+        reason: 'highRiskCyberActivity',
+      }),
+      notification('model/safetyBuffering/updated', {
+        model: 'model-b',
+        reasons: ['capacity'],
+        showBufferingUi: true,
+        fasterModel: 'model-fast',
+      }),
+      notification('model/verification', {
+        verifications: ['trustedAccessForCyber'],
+      }),
+    ])).toEqual([
+      { type: 'thinking', delta: '\n\nPlan update:\nExecution order\n✓ Inspect\n→ Patch' },
+      {
+        type: 'notice',
+        level: 'warning',
+        message: 'Codex model rerouted: model-a → model-b (highRiskCyberActivity)',
+      },
+      {
+        type: 'notice',
+        level: 'warning',
+        message: 'Codex is buffering model model-b.\ncapacity\nFaster model available: model-fast',
+      },
+      {
+        type: 'notice',
+        level: 'warning',
+        message: 'Codex requires verification: trustedAccessForCyber',
+      },
     ]);
   });
 });

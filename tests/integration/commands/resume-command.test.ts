@@ -381,6 +381,40 @@ describe('agent-aware resume commands', () => {
     expect(picker).toContain('workspace-write');
   });
 
+  it('updates an active Codex thread for subsequent turns and migrates its catalog identity', async () => {
+    const h = await createHarness('codex');
+    h.catalog.upsertActive({ ...h.identity, threadId: 'thread-current', now: 1000 });
+    const activeRun = Object.assign(
+      h.agent.run({ runId: 'run-active', prompt: 'running' }),
+      {
+        remoteSession: () => ({
+          endpoint: h.agent.appServerEndpointValue,
+          threadId: 'thread-current',
+        }),
+      },
+    );
+    h.activeRuns.register('chat-1', activeRun);
+
+    await expect(h.run('/permissions read-only')).resolves.toBe(true);
+
+    expect(h.agent.appServerRequests).toEqual([{
+      method: 'thread/settings/update',
+      params: {
+        threadId: 'thread-current',
+        approvalPolicy: 'never',
+        sandboxPolicy: { type: 'readOnly', networkAccess: false },
+      },
+    }]);
+    expect(h.catalog.activeFor(h.identity)).toBeUndefined();
+    expect(h.catalog.entries()).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        threadId: 'thread-current',
+        status: 'active',
+        policyFingerprint: expect.not.stringMatching(h.identity.policyFingerprint),
+      }),
+    ]));
+  });
+
   it('prints an exact remote attach command for the current Codex thread', async () => {
     const h = await createHarness('codex');
     h.catalog.upsertActive({ ...h.identity, threadId: 'thread-current', now: 1000 });
@@ -509,6 +543,18 @@ describe('agent-aware resume commands', () => {
       method: 'thread/delete',
       params: { threadId: 'thread-current' },
     });
+  });
+
+  it('applies the admin gate before dispatching Codex app-server commands', async () => {
+    const h = await createHarness('codex');
+    h.controls.botOwnerId = 'ou-owner';
+    h.controls.profileConfig.access.admins = [];
+    h.catalog.upsertActive({ ...h.identity, threadId: 'thread-current', now: 1000 });
+
+    await expect(h.run('/delete confirm')).resolves.toBe(true);
+
+    expect(lastMarkdown(h.channel)).toContain('仅管理员可用');
+    expect(h.agent.appServerRequests).toHaveLength(0);
   });
 
   it('consumes TUI-only and unknown Codex slash commands instead of sending them to the model', async () => {

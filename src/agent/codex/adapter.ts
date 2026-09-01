@@ -1,4 +1,5 @@
 import { join } from 'node:path';
+import { loadCodexProfileConfig, resolveCodexHome } from '../../config/codex-profiles';
 import type { SandboxMode } from '../../config/profile-schema';
 import { log } from '../../core/logger';
 import { SpawnFailed } from '../../runtime/errors';
@@ -83,6 +84,7 @@ export class CodexAdapter implements AgentAdapter {
   run(options: AgentRunOptions): AgentRun {
     if (!options.cwd) throw new Error('cwd is required for CodexAdapter.run');
     const profile = options.profile ?? this.options.profile;
+    const codexHome = this.codexHome();
     const client = this.clientFor(profile);
     return new CodexAppServerRun({
       client,
@@ -92,6 +94,15 @@ export class CodexAdapter implements AgentAdapter {
         sandbox: options.sandbox ?? this.options.sandbox ?? 'danger-full-access',
         profile,
       },
+      ...(profile
+        ? {
+            loadProfileConfig: () => loadCodexProfileConfig({
+              cwd: options.cwd!,
+              codexHome,
+              profile,
+            }),
+          }
+        : {}),
       botIdentity: this.botIdentity,
       setBridgeThreadActive: (selectedProfile, threadId, active) => {
         this.setBridgeThreadActive(selectedProfile, threadId, active);
@@ -141,10 +152,7 @@ export class CodexAdapter implements AgentAdapter {
         'codex-app-server',
         selected ? safeSegment(selected) : 'default',
       ),
-      codexHome: this.options.codexHome,
-      inheritCodexHome: this.options.inheritCodexHome,
-      ignoreUserConfig: this.options.ignoreUserConfig,
-      ignoreRules: this.options.ignoreRules,
+      codexHome: this.codexHome(),
       profile: selected,
       env: buildLarkChannelEnv(this.options.larkChannel),
     });
@@ -153,6 +161,15 @@ export class CodexAdapter implements AgentAdapter {
     });
     this.clients.set(key, client);
     return client;
+  }
+
+  private codexHome(): string {
+    return resolveCodexHome({
+      cwd: process.cwd(),
+      codexHome: this.options.codexHome,
+      inheritCodexHome: this.options.inheritCodexHome,
+      profileStateDir: this.options.profileStateDir,
+    }, process.env);
   }
 
   private handleAdapterNotification(
@@ -191,6 +208,7 @@ export class CodexAdapter implements AgentAdapter {
 interface CodexAppServerRunInput {
   client: CodexAppServerClient;
   options: AgentRunOptions & { cwd: string; sandbox: SandboxMode };
+  loadProfileConfig?: () => Promise<Record<string, unknown>>;
   botIdentity?: AgentBotIdentity;
   setBridgeThreadActive(profile: string | undefined, threadId: string, active: boolean): void;
 }
@@ -201,6 +219,7 @@ class CodexAppServerRun implements AgentRun {
 
   private readonly client: CodexAppServerClient;
   private readonly options: CodexAppServerRunInput['options'];
+  private readonly loadProfileConfig: CodexAppServerRunInput['loadProfileConfig'];
   private readonly botIdentity: AgentBotIdentity | undefined;
   private readonly setBridgeThreadActive: CodexAppServerRunInput['setBridgeThreadActive'];
   private readonly queue = new AsyncEventQueue<AgentEvent>();
@@ -218,6 +237,7 @@ class CodexAppServerRun implements AgentRun {
   constructor(input: CodexAppServerRunInput) {
     this.client = input.client;
     this.options = input.options;
+    this.loadProfileConfig = input.loadProfileConfig;
     this.botIdentity = input.botIdentity;
     this.setBridgeThreadActive = input.setBridgeThreadActive;
     this.runId = input.options.runId;
@@ -275,8 +295,8 @@ class CodexAppServerRun implements AgentRun {
     try {
       await this.client.start();
       const threadResponse = this.options.threadId
-        ? await this.client.request('thread/resume', this.threadParams(this.options.threadId))
-        : await this.client.request('thread/start', this.threadParams());
+        ? await this.client.request('thread/resume', await this.threadParams(this.options.threadId))
+        : await this.client.request('thread/start', await this.threadParams());
       const response = recordValue(threadResponse);
       const thread = recordValue(response?.thread);
       const threadId = stringValue(thread?.id);
@@ -334,7 +354,8 @@ class CodexAppServerRun implements AgentRun {
     }
   }
 
-  private threadParams(threadId?: string): Record<string, unknown> {
+  private async threadParams(threadId?: string): Promise<Record<string, unknown>> {
+    const config = await this.loadProfileConfig?.();
     return {
       ...(threadId ? { threadId } : {}),
       cwd: this.options.cwd,
@@ -342,6 +363,7 @@ class CodexAppServerRun implements AgentRun {
       sandbox: this.options.sandbox,
       ...(this.options.model ? { model: this.options.model } : {}),
       ...(this.options.personality ? { personality: this.options.personality } : {}),
+      ...(config ? { config } : {}),
     };
   }
 

@@ -298,7 +298,7 @@ describe('Claude slash command visible behavior', () => {
     expect(lastMarkdown(h.channel)).toMatch(/当前(有 .* 个 bot|没有 bot)/);
 
     await expect(h.run('/exit')).resolves.toBe(true);
-    expect(lastMarkdown(h.channel)).toContain('用法:`/exit <id|#>`');
+    expect(lastMarkdown(h.channel)).toContain('用法：`/exit <id|#>`');
   });
 
   it('handles /reconnect by acknowledging then calling restart', async () => {

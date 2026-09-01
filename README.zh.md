@@ -138,6 +138,7 @@ lark-channel-bridge profile export <name> --include-secrets --yes
 | 命令 | 作用 |
 |---|---|
 | `/new`, `/clear`, `/reset` | 清空当前会话 |
+| `/new chat [名称]` | 按当前路径创建独立飞书群窗口；继承 Codex profile/权限并新建 thread |
 | `/cd <path>` | 切换工作目录；Codex 随后选择 CLI profile 和新建/恢复方式 |
 | `/ws list` | 列出命名工作空间 |
 | `/ws save <name>` | 把当前工作目录保存为命名工作空间 |

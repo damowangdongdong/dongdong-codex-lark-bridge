@@ -3,6 +3,8 @@ import type { ClaudePermissionMode, CodexSandboxMode } from '../config/permissio
 
 export type { ClaudePermissionMode } from '../config/permissions';
 
+export type AgentNoticeLevel = 'warning' | 'error' | 'retry' | 'recovered';
+
 export type AgentEvent =
   | { type: 'system'; sessionId?: string; threadId?: string; cwd?: string; model?: string }
   | { type: 'user_text'; content: string }
@@ -12,6 +14,14 @@ export type AgentEvent =
   | { type: 'tool_use'; id: string; name: string; input: unknown }
   | { type: 'tool_progress'; id: string; delta: string }
   | { type: 'tool_result'; id: string; output: string; isError: boolean }
+  | {
+      type: 'notice';
+      level: AgentNoticeLevel;
+      message: string;
+      attempt?: number;
+      maxAttempts?: number;
+      delaySeconds?: number;
+    }
   | {
       type: 'usage';
       inputTokens?: number;

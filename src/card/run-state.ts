@@ -1,4 +1,4 @@
-import type { AgentEvent } from '../agent/types';
+import type { AgentEvent, AgentNoticeLevel } from '../agent/types';
 
 export type ToolStatus = 'running' | 'done' | 'error';
 
@@ -10,9 +10,18 @@ export interface ToolEntry {
   output?: string;
 }
 
+export interface NoticeEntry {
+  level: AgentNoticeLevel;
+  message: string;
+  attempt?: number;
+  maxAttempts?: number;
+  delaySeconds?: number;
+}
+
 export type Block =
   | { kind: 'text'; content: string; streaming: boolean }
   | { kind: 'user'; content: string }
+  | { kind: 'notice'; notice: NoticeEntry }
   | { kind: 'tool'; tool: ToolEntry };
 
 export type FooterStatus = 'thinking' | 'tool_running' | 'streaming' | null;
@@ -150,6 +159,25 @@ export function reduce(state: RunState, evt: AgentEvent): RunState {
       });
       return { ...state, blocks, footer: 'tool_running' };
     }
+
+    case 'notice':
+      return {
+        ...state,
+        blocks: [
+          ...closeStreamingText(state.blocks),
+          {
+            kind: 'notice',
+            notice: {
+              level: evt.level,
+              message: evt.message,
+              ...(evt.attempt !== undefined ? { attempt: evt.attempt } : {}),
+              ...(evt.maxAttempts !== undefined ? { maxAttempts: evt.maxAttempts } : {}),
+              ...(evt.delaySeconds !== undefined ? { delaySeconds: evt.delaySeconds } : {}),
+            },
+          },
+        ],
+        reasoning: { ...state.reasoning, active: false },
+      };
 
     case 'error': {
       const terminal =

@@ -253,7 +253,7 @@ async function waitForServiceConnect(
   appId: string,
   profile: string,
   beforePids: ReadonlySet<number>,
-  timeoutMs = 30_000,
+  timeoutMs = 45_000,
 ): Promise<ProcessEntry | undefined> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -307,7 +307,7 @@ async function reportConnectAfter(
     );
     return;
   }
-  console.warn(`⚠ 已下发指令,但 30 秒内未观察到 bot 连接成功 (${verb})。`);
+  console.warn(`⚠ 已下发指令,但 45 秒内未观察到 bot 连接成功 (${verb})。`);
   console.warn(`  查看日志: tail -f ${daemonStderrPath(profile)}`);
   console.warn(`              tail -f ${daemonStdoutPath(profile)}`);
 }

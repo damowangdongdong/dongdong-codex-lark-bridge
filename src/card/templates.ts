@@ -267,7 +267,7 @@ export function helpCard(agentName = 'Agent'): object {
         '**命令列表**',
         '',
         '- `/new` `/clear` `/reset` — 清空当前 chat 的会话',
-        '- `/new chat [name]` — 新建群+新会话，自动拉你进群',
+        '- `/new chat [name]` — 为当前路径创建独立群窗口，继承 Codex 设置并新建 thread',
         '- `/resume [N]` — 列出并恢复历史会话（最多 N 条）',
         `- \`/cd <path>\` — 切换工作目录${codex ? '，再选择 Codex profile 和新建/恢复' : '（会重置 session）'}`,
         '- `/ws list|save <name>|use <name>|remove <name>` — 工作目录',

@@ -1,4 +1,4 @@
-import { chmod, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -29,9 +29,17 @@ describe.skipIf(process.platform === 'win32')('CodexAdapter app-server process c
   });
 
   it('starts a profiled app-server and streams a complete new turn', async () => {
-    process.env.CODEX_HOME = '/outer/codex-home';
     const fake = await createFakeCodex();
     cleanup.push(fake.dir);
+    const codexHome = join(fake.dir, 'codex-home');
+    await mkdir(codexHome);
+    await writeFile(join(codexHome, 'freerouter.config.toml'), `
+model = "free-model"
+[model_providers.freerouter]
+base_url = "https://example.test/v1"
+experimental_bearer_token = "secret-token"
+`);
+    process.env.CODEX_HOME = codexHome;
     const cwd = await realpath(fake.dir);
     const adapter = track(
       new CodexAdapter({ binary: fake.path, profileStateDir: fake.dir }),
@@ -69,16 +77,28 @@ describe.skipIf(process.platform === 'win32')('CodexAdapter app-server process c
     ]);
 
     const record = await readRecord(fake.recordPath);
-    expect(record.argv).toContain('--profile');
-    expect(record.argv[record.argv.indexOf('--profile') + 1]).toBe('freerouter');
-    expect(record.argv.indexOf('--profile')).toBeLessThan(record.argv.indexOf('app-server'));
-    expect(record.env.CODEX_HOME).toBe('/outer/codex-home');
+    expect(record.argv).not.toContain('--profile');
+    expect(record.argv).not.toContain('--ignore-rules');
+    expect(record.argv.join(' ')).not.toContain('secret-token');
+    expect(record.env.CODEX_HOME).toBe(codexHome);
     expect(record.messages.map((message) => message.method)).toEqual([
       'initialize',
       'initialized',
       'thread/start',
       'turn/start',
     ]);
+    const threadStart = record.messages.find((message) => message.method === 'thread/start');
+    expect(threadStart?.params).toMatchObject({
+      config: {
+        model: 'free-model',
+        model_providers: {
+          freerouter: {
+            base_url: 'https://example.test/v1',
+            experimental_bearer_token: 'secret-token',
+          },
+        },
+      },
+    });
     const turnStart = record.messages.find((message) => message.method === 'turn/start');
     expect(turnStart?.params).toMatchObject({
       threadId: 'thread-new',
@@ -96,7 +116,7 @@ describe.skipIf(process.platform === 'win32')('CodexAdapter app-server process c
     expect(JSON.stringify(turnStart?.params)).toContain('hello from lark');
     expect(JSON.stringify(turnStart?.params)).toContain('ou_bot_self');
     expect(run.remoteSession?.()).toMatchObject({ threadId: 'thread-new', profile: 'freerouter' });
-    expect(run.remoteSession?.().endpoint).toMatch(/^unix:\/\//);
+    expect(run.remoteSession?.().endpoint).toMatch(/^ws:\/\/127\.0\.0\.1:/);
   });
 
   it('resumes a thread, steers the active turn, and interrupts it', async () => {
@@ -263,7 +283,7 @@ const { WebSocketServer } = ws;
 
 const argv = process.argv.slice(2);
 const endpoint = argv[argv.indexOf('--listen') + 1];
-const socketPath = endpoint.slice('unix://'.length);
+const listenUrl = new URL(endpoint);
 const recordPath = ${JSON.stringify(input.recordPath)};
 const messages = [];
 const record = () => writeFileSync(recordPath, JSON.stringify({
@@ -325,7 +345,7 @@ wss.on('connection', (socket) => {
     }
   });
 });
-server.listen(socketPath);
+server.listen(Number(listenUrl.port), listenUrl.hostname);
 const shutdown = () => server.close(() => process.exit(0));
 process.on('SIGTERM', shutdown);
 process.on('SIGINT', shutdown);

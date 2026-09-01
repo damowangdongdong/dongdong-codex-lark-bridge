@@ -72,6 +72,21 @@ export class WorkspaceStore {
     this.schedulePersist();
   }
 
+  /** Seed a newly-created chat from the source scope while starting a fresh thread. */
+  inheritForNewScope(sourceScope: string, targetScope: string, cwd: string): void {
+    const source = this.data.chats[sourceScope];
+    this.data.chats[targetScope] = {
+      cwd,
+      ...(source?.codexProfile !== undefined
+        ? { codexProfile: source.codexProfile, launchMode: 'new' as const }
+        : {}),
+      ...(source?.codexSandbox ? { codexSandbox: source.codexSandbox } : {}),
+      ...(source?.codexModel !== undefined ? { codexModel: source.codexModel } : {}),
+      ...(source?.codexPersonality ? { codexPersonality: source.codexPersonality } : {}),
+    };
+    this.schedulePersist();
+  }
+
   prepareCodexLaunch(chatId: string, cwd: string): void {
     const previous = this.data.chats[chatId];
     this.data.chats[chatId] = {

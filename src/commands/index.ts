@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { dirname, isAbsolute } from 'node:path';
+import { basename, dirname, isAbsolute } from 'node:path';
 import type { LarkChannel, NormalizedMessage } from '@larksuite/channel';
 import { claudeCapability, codexCapability } from '../agent/capability';
 import { discoverCodexProfiles } from '../config/codex-profiles';
@@ -248,19 +248,7 @@ export async function tryHandleCommand(ctx: CommandContext): Promise<boolean> {
   const cmd = parts[0] ?? '';
   const args = parts.slice(1).join(' ');
   const h = handlers[cmd];
-  if (!h) {
-    if (ctx.agent.id !== 'codex') return false;
-    try {
-      await handleCodexSlash(cmd, args, ctx);
-    } catch (err) {
-      log.fail('command', err, { cmd, step: 'codex-slash' });
-      await reply(
-        ctx,
-        `❌ Codex 命令执行失败：${err instanceof Error ? err.message : String(err)}`,
-      );
-    }
-    return true;
-  }
+  if (!h && ctx.agent.id !== 'codex') return false;
   if (
     isAdminCommand(cmd) &&
     !canRunAdminCommand(ctx.controls.profileConfig, ctx.controls, ctx.msg.senderId).ok
@@ -270,6 +258,18 @@ export async function tryHandleCommand(ctx: CommandContext): Promise<boolean> {
       sender: ctx.msg.senderId.slice(-6),
     });
     await reply(ctx, '❌ 此命令仅管理员可用。');
+    return true;
+  }
+  if (!h) {
+    try {
+      await handleCodexSlash(cmd, args, ctx);
+    } catch (err) {
+      log.fail('command', err, { cmd, step: 'codex-slash' });
+      await reply(
+        ctx,
+        `❌ Codex 命令执行失败：${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
     return true;
   }
   try {
@@ -468,15 +468,19 @@ async function handlePermissions(args: string, ctx: CommandContext): Promise<voi
     codexCapability(ctx.controls.profileConfig).permissions.maxAccess,
   );
   const effective = accessToCodexSandbox(access);
-  const currentThreadId = !ctx.activeRuns.get(ctx.scope)
-    ? await currentCodexThreadId(ctx)
-    : undefined;
+  const activeRun = Boolean(ctx.activeRuns.get(ctx.scope));
+  const currentThreadId = await currentCodexThreadId(ctx);
   ctx.workspaces.setCodexSandbox(ctx.scope, effective);
   if (currentThreadId) {
-    await updateCodexThreadSettings(ctx, currentThreadId, {
+    const settings = {
       approvalPolicy: 'never',
       sandboxPolicy: codexSandboxPolicy(effective, cwd),
-    });
+    };
+    if (activeRun) {
+      await codexRpc(ctx, 'thread/settings/update', { threadId: currentThreadId, ...settings });
+    } else {
+      await updateCodexThreadSettings(ctx, currentThreadId, settings);
+    }
     const nextIdentity = await currentSessionCatalogIdentity(ctx, cwd);
     if (nextIdentity && ctx.sessionCatalog) {
       if (ctx.sessionCatalogIdentity) {
@@ -1079,7 +1083,10 @@ function parseCodexSandbox(value: string): CodexSandboxMode | undefined {
 
 async function handleNewChat(rawName: string, ctx: CommandContext): Promise<void> {
   const sourceCwd = effectiveWorkspaceCwd(ctx);
-  const name = rawName || defaultChatName(ctx.agent.displayName);
+  const projectName = sourceCwd ? basename(sourceCwd) : '';
+  const name = rawName || (projectName
+    ? `${ctx.agent.displayName} · ${projectName}`
+    : defaultChatName(ctx.agent.displayName));
 
   let created;
   try {
@@ -1095,14 +1102,14 @@ async function handleNewChat(rawName: string, ctx: CommandContext): Promise<void
   }
 
   // Inherit cwd from the originating chat so the new group starts in the
-  // same workspace; otherwise it'll fall back to $HOME.
+  // same workspace and Codex settings, but always with a fresh thread.
   if (sourceCwd) {
-    ctx.workspaces.setCwd(created.chatId, sourceCwd);
+    ctx.workspaces.inheritForNewScope(ctx.scope, created.chatId, sourceCwd);
   }
 
   // Welcome the user inside the new group with a hint about how to start.
   const welcome = sourceCwd
-    ? `🎉 群已建好，cwd 继承自原群：\`${sourceCwd}\`\n\n@我 + 任意消息开始对话。`
+    ? `🎉 独立项目窗口已建好：\`${sourceCwd}\`\n\n已继承当前 Codex profile/权限设置，下一条消息会创建独立新会话。\n\n@我 + 任意消息开始对话。`
     : '🎉 群已建好。\n\n@我 + 任意消息开始对话。';
   try {
     await ctx.channel.send(created.chatId, { markdown: welcome });

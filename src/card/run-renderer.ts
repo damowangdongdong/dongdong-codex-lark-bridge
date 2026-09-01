@@ -1,5 +1,5 @@
 import { deepMaskEmails } from './mask-email';
-import type { Block, FooterStatus, RunState, ToolEntry } from './run-state';
+import type { Block, FooterStatus, NoticeEntry, RunState, ToolEntry } from './run-state';
 import { toolBodyMd, toolHeaderText } from './tool-render';
 
 const REASONING_MAX = 1500;
@@ -17,7 +17,11 @@ interface UserGroup {
   kind: 'user';
   content: string;
 }
-type Group = ToolGroup | TextGroup | UserGroup;
+interface NoticeGroup {
+  kind: 'notice';
+  notice: NoticeEntry;
+}
+type Group = ToolGroup | TextGroup | UserGroup | NoticeGroup;
 
 export interface RunCardRenderOptions {
   signCallback?: (action: string) => string;
@@ -48,6 +52,8 @@ export function renderCard(state: RunState, options: RunCardRenderOptions = {}):
         border: 'blue',
         body: group.content,
       }));
+    } else if (group.kind === 'notice') {
+      elements.push(noticePanel(group.notice));
     } else {
       elements.push(...renderToolGroup(group.tools, state.terminal !== 'running'));
     }
@@ -155,9 +161,13 @@ function* groupBlocks(blocks: Block[]): Generator<Group> {
         yield { kind: 'tools', tools: toolBuf };
         toolBuf = [];
       }
-      yield b.kind === 'user'
-        ? { kind: 'user', content: b.content }
-        : { kind: 'text', content: b.content };
+      if (b.kind === 'user') {
+        yield { kind: 'user', content: b.content };
+      } else if (b.kind === 'notice') {
+        yield { kind: 'notice', notice: b.notice };
+      } else {
+        yield { kind: 'text', content: b.content };
+      }
     }
   }
   if (toolBuf.length > 0) yield { kind: 'tools', tools: toolBuf };
@@ -187,6 +197,28 @@ function reasoningPanel(content: string, active: boolean): object {
     expanded: active,
     border: 'grey',
     body: truncate(content, REASONING_MAX),
+  });
+}
+
+function noticePanel(notice: NoticeEntry): object {
+  const retryCount = notice.attempt !== undefined && notice.maxAttempts !== undefined
+    ? ` ${notice.attempt}/${notice.maxAttempts}`
+    : '';
+  const title = notice.level === 'retry'
+    ? `🔄 **Codex 正在重试${retryCount}**`
+    : notice.level === 'recovered'
+      ? '✅ **Codex 已恢复**'
+      : notice.level === 'warning'
+        ? '⚠️ **Codex 提示**'
+        : '🚨 **Codex 错误**';
+  const delay = notice.delaySeconds !== undefined
+    ? `\n\n_等待 ${notice.delaySeconds} 秒后重试_`
+    : '';
+  return collapsiblePanel({
+    title,
+    expanded: notice.level !== 'recovered',
+    border: notice.level === 'error' ? 'red' : notice.level === 'recovered' ? 'grey' : 'blue',
+    body: `${notice.message}${delay}`,
   });
 }
 
@@ -293,6 +325,16 @@ function summaryText(state: RunState): string {
   if (state.terminal === 'idle_timeout') return '已超时';
   if (state.terminal === 'error') return '出错';
   if (state.terminal === 'done') return '已完成';
+  const latestNotice = [...state.blocks].reverse().find((block) => block.kind === 'notice');
+  if (latestNotice?.kind === 'notice' && latestNotice.notice.level === 'retry') {
+    const { attempt, maxAttempts } = latestNotice.notice;
+    return attempt !== undefined && maxAttempts !== undefined
+      ? `正在重试 ${attempt}/${maxAttempts}`
+      : '正在重试';
+  }
+  if (latestNotice?.kind === 'notice' && latestNotice.notice.level === 'error') {
+    return 'Codex 报错';
+  }
   if (state.footer === 'tool_running') return '正在调用工具';
   if (state.footer === 'streaming') return '正在输出';
   return '思考中';
