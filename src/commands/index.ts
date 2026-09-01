@@ -1418,11 +1418,15 @@ async function resolveProjectChat(
   if (mapped) {
     try {
       const live = await getProjectChatInfo(ctx.channel, mapped.chatId);
-      const name = live.name || mapped.name;
-      if (name !== mapped.name) {
-        ctx.workspaces.setProjectChat(cwd, { chatId: mapped.chatId, name });
+      const members = await getProjectChatMembers(ctx.channel, mapped.chatId);
+      if (members.some((member) => member.id === ctx.msg.senderId)) {
+        const name = live.name || mapped.name;
+        if (name !== mapped.name) {
+          ctx.workspaces.setProjectChat(cwd, { chatId: mapped.chatId, name });
+        }
+        return { chatId: mapped.chatId, name, created: false };
       }
-      return { chatId: mapped.chatId, name, created: false };
+      ctx.workspaces.removeProjectChat(cwd);
     } catch (err) {
       if (isMissingProjectChatError(err)) {
         ctx.workspaces.removeProjectChat(cwd);
@@ -1465,6 +1469,23 @@ async function getProjectChatInfo(channel: LarkChannel, chatId: string) {
       new Promise<never>((_, reject) => {
         timer = setTimeout(
           () => reject(new Error('project chat lookup timed out')),
+          PROJECT_CHAT_LOOKUP_TIMEOUT_MS,
+        );
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+async function getProjectChatMembers(channel: LarkChannel, chatId: string) {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      channel.getChatMembers(chatId, { force: true, idType: 'open_id' }),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error('project chat members lookup timed out')),
           PROJECT_CHAT_LOOKUP_TIMEOUT_MS,
         );
       }),

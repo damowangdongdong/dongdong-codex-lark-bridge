@@ -39,11 +39,15 @@ interface Harness {
   activeRuns: ActiveRuns;
   pending: PendingQueue;
   projectChats: {
-    chats: Array<{ id: string; name: string }>;
+    chats: Array<{ id: string; name: string; members: string[] }>;
     createCalls: number;
     getError?: Error;
     getNeverResolves?: boolean;
     onGet?: () => void;
+    getMembersCalls: Array<{ chatId: string; force?: boolean; idType?: string }>;
+    getMembersError?: Error;
+    getMembersNeverResolves?: boolean;
+    onGetMembers?: () => void;
   };
   run(content: string, options?: { withCatalogIdentity?: boolean; chatMode?: 'p2p' | 'group' | 'topic' }): Promise<boolean>;
   dispatchResumeArg(
@@ -577,7 +581,7 @@ describe('agent-aware resume commands', () => {
     });
   });
 
-  it('对同一路径复用仍存在的项目群，群已删除时才重建', async () => {
+  it('对同一路径复用请求者仍在其中的项目群，群已删除时才重建', async () => {
     const h = await createHarness('codex');
 
     await expect(h.run(`/cd ${h.tmp.workspace}`)).resolves.toBe(true);
@@ -593,6 +597,11 @@ describe('agent-aware resume commands', () => {
     expect(h.projectChats.createCalls).toBe(1);
     expect(h.workspaces.projectChatFor(await realpath(h.tmp.workspace))?.name)
       .toBe('Codex 项目群｜workspace');
+    expect(h.projectChats.getMembersCalls.at(-1)).toEqual({
+      chatId: 'oc_project_1',
+      force: true,
+      idType: 'open_id',
+    });
     expect(h.channel.sent.some((entry) =>
       entry.chatId === 'chat-1'
       && JSON.stringify(entry.content).includes('已复用'),
@@ -604,6 +613,26 @@ describe('agent-aware resume commands', () => {
     expect(h.projectChats.createCalls).toBe(2);
     expect(h.workspaces.projectChatFor(await realpath(h.tmp.workspace))?.chatId)
       .toBe('oc_project_2');
+  });
+
+  it('请求者已退出映射的项目群时新建群并更新映射', async () => {
+    const h = await createHarness('codex');
+
+    await expect(h.run(`/cd ${h.tmp.workspace}`)).resolves.toBe(true);
+    await h.dispatchLaunch('freerouter', 'new');
+    h.projectChats.chats[0]!.members = [];
+
+    await expect(h.run(`/cd ${h.tmp.workspace}`)).resolves.toBe(true);
+    await h.dispatchLaunch('freerouter', 'new');
+
+    expect(h.projectChats.createCalls).toBe(2);
+    expect(h.workspaces.projectChatFor(await realpath(h.tmp.workspace))).toEqual({
+      chatId: 'oc_project_2',
+      name: 'Codex 项目群｜workspace',
+    });
+    expect(h.projectChats.chats[1]?.members).toEqual(['ou-user']);
+    expect(lastMarkdown(h.channel)).toContain('已创建');
+    expect(lastMarkdown(h.channel)).not.toContain('已复用');
   });
 
   it('/new chat 复用同一路径项目群并归档该群的当前 Codex thread', async () => {
@@ -641,6 +670,45 @@ describe('agent-aware resume commands', () => {
 
     await expect(h.run(`/cd ${h.tmp.workspace}`)).resolves.toBe(true);
     await h.dispatchLaunch('freerouter', 'new');
+
+    expect(h.projectChats.createCalls).toBe(1);
+    expect(h.workspaces.codexLaunchPendingFor('chat-1')).toBe(true);
+    expect(lastMarkdown(h.channel)).toContain('避免重复建群');
+  });
+
+  it('无法确认请求者是否仍在项目群时不重复建群', async () => {
+    const h = await createHarness('codex');
+
+    await expect(h.run(`/cd ${h.tmp.workspace}`)).resolves.toBe(true);
+    await h.dispatchLaunch('freerouter', 'new');
+    h.projectChats.getMembersError = new Error('member lookup unavailable');
+
+    await expect(h.run(`/cd ${h.tmp.workspace}`)).resolves.toBe(true);
+    await h.dispatchLaunch('freerouter', 'new');
+
+    expect(h.projectChats.createCalls).toBe(1);
+    expect(h.workspaces.codexLaunchPendingFor('chat-1')).toBe(true);
+    expect(lastMarkdown(h.channel)).toContain('避免重复建群');
+  });
+
+  it('项目群成员查询不返回时结束回调且不重复建群', async () => {
+    const h = await createHarness('codex');
+
+    await expect(h.run(`/cd ${h.tmp.workspace}`)).resolves.toBe(true);
+    await h.dispatchLaunch('freerouter', 'new');
+    await expect(h.run(`/cd ${h.tmp.workspace}`)).resolves.toBe(true);
+    h.projectChats.getMembersNeverResolves = true;
+    let markLookupStarted: (() => void) | undefined;
+    const lookupStarted = new Promise<void>((resolve) => {
+      markLookupStarted = resolve;
+    });
+    h.projectChats.onGetMembers = () => markLookupStarted?.();
+    vi.useFakeTimers();
+
+    const launch = h.dispatchLaunch('freerouter', 'new');
+    await lookupStarted;
+    await vi.advanceTimersByTimeAsync(10_000);
+    await launch;
 
     expect(h.projectChats.createCalls).toBe(1);
     expect(h.workspaces.codexLaunchPendingFor('chat-1')).toBe(true);
@@ -956,7 +1024,11 @@ async function createHarness(
 ): Promise<Harness> {
   const tmp = await createTmpProfile(`resume-command-${agentKind}-`);
   const channel = createFakeChannel();
-  const projectChats: Harness['projectChats'] = { chats: [], createCalls: 0 };
+  const projectChats: Harness['projectChats'] = {
+    chats: [],
+    createCalls: 0,
+    getMembersCalls: [],
+  };
   Object.assign(channel, {
     getChatInfo: async (chatId: string) => {
       projectChats.onGet?.();
@@ -966,9 +1038,25 @@ async function createHarness(
       if (!chat) throw Object.assign(new Error('chat not found'), { code: 'target_revoked' });
       return { chatId: chat.id, name: chat.name, chatType: 'group' };
     },
-    createChat: async (input: { name: string }) => {
+    getChatMembers: async (
+      chatId: string,
+      options: { force?: boolean; idType?: string } = {},
+    ) => {
+      projectChats.getMembersCalls.push({ chatId, ...options });
+      projectChats.onGetMembers?.();
+      if (projectChats.getMembersError) throw projectChats.getMembersError;
+      if (projectChats.getMembersNeverResolves) await new Promise<never>(() => {});
+      const chat = projectChats.chats.find((candidate) => candidate.id === chatId);
+      if (!chat) throw Object.assign(new Error('chat not found'), { code: 'target_revoked' });
+      return chat.members.map((id) => ({ id, idType: 'open_id' }));
+    },
+    createChat: async (input: { name: string; inviteUserIds?: string[] }) => {
       projectChats.createCalls += 1;
-      const chat = { id: `oc_project_${projectChats.createCalls}`, name: input.name };
+      const chat = {
+        id: `oc_project_${projectChats.createCalls}`,
+        name: input.name,
+        members: [...(input.inviteUserIds ?? [])],
+      };
       projectChats.chats.push(chat);
       return { chatId: chat.id };
     },
