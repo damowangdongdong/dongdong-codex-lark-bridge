@@ -28,7 +28,7 @@ describe('help card', () => {
     expect(rendered).toContain('lark-cli');
 
     const callbacks = findCallbacks(card);
-    expect(callbacks).toEqual(['status', 'resume', 'ws.list', 'new']);
+    expect(callbacks).toEqual(['status', 'profile', 'resume', 'ws.list', 'new']);
   });
 });
 

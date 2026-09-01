@@ -80,4 +80,22 @@ describe('WorkspaceStore new chat inheritance', () => {
     });
     await store.flush();
   });
+
+  it('持久化 Bot 默认 Codex profile，同时允许项目群覆盖', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'workspace-default-codex-profile-'));
+    cleanup.push(root);
+    const path = join(root, 'workspaces.json');
+    const store = new WorkspaceStore(path);
+
+    store.setDefaultCodexProfile('freerouter');
+    store.setCwd('project-chat', '/repo/project');
+    store.setCodexLaunch('project-chat', null, 'new');
+    await store.flush();
+
+    const reloaded = new WorkspaceStore(path);
+    await reloaded.load();
+    expect(reloaded.defaultCodexProfile('configured')).toBe('freerouter');
+    expect(reloaded.codexProfileFor('new-chat', 'configured')).toBe('freerouter');
+    expect(reloaded.codexProfileFor('project-chat', 'configured')).toBeUndefined();
+  });
 });

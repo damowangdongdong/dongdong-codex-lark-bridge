@@ -81,6 +81,67 @@ export interface WorkspaceLaunchCardOptions {
   projectChatName?: string;
 }
 
+export interface CodexProfileCardOptions {
+  botName: string;
+  profiles: string[];
+  configuredProfile?: string;
+}
+
+export function codexProfileCard(options: CodexProfileCardOptions): object {
+  const initialProfile = options.configuredProfile && options.profiles.includes(options.configuredProfile)
+    ? options.configuredProfile
+    : '__default__';
+  return {
+    schema: '2.0',
+    config: { summary: { content: '切换 Codex profile' } },
+    header: {
+      template: 'blue',
+      title: { tag: 'plain_text', content: '⚙️ 切换 Codex profile' },
+    },
+    body: {
+      elements: [
+        {
+          tag: 'markdown',
+          content:
+            `为 **${escapeMd(options.botName)}** 选择默认的 Codex CLI profile。\n\n` +
+            '之后从本私聊使用 `/cd` 或 `/ws use` 时，启动卡会默认选中它。' +
+            '已有项目群保留各自的 profile；在项目群发送 `/profile` 可单独切换。',
+        },
+        {
+          tag: 'form',
+          name: 'codex_profile_form',
+          elements: [
+            { tag: 'markdown', content: '**默认 Codex CLI profile**' },
+            {
+              tag: 'select_static',
+              name: 'codex_profile',
+              initial_option: initialProfile,
+              options: [
+                {
+                  text: { tag: 'plain_text', content: '默认配置（不传 --profile）' },
+                  value: '__default__',
+                },
+                ...options.profiles.map((profile) => ({
+                  text: { tag: 'plain_text', content: profile },
+                  value: profile,
+                })),
+              ],
+            },
+            {
+              tag: 'button',
+              name: 'profile_submit',
+              text: { tag: 'plain_text', content: '切换 profile' },
+              type: 'primary',
+              form_action_type: 'submit',
+              behaviors: [{ type: 'callback', value: { cmd: 'profile.set' } }],
+            },
+          ],
+        },
+      ],
+    },
+  };
+}
+
 export function workspaceLaunchCard(options: WorkspaceLaunchCardOptions): object {
   const initialProfile = options.configuredProfile && options.profiles.includes(options.configuredProfile)
     ? options.configuredProfile
@@ -351,7 +412,8 @@ export function helpCard(agentName = 'Agent', botName?: string): object {
       ...(codex
         ? [
             '- `/new chat [名称]` — 为当前路径进入独立项目群，并创建新的 Codex thread。',
-            '- `/profile` — 在项目群内重新选择 Codex CLI profile，以及新建或恢复会话。',
+            '- 私聊 `/profile` — 切换 Bot 默认的 Codex CLI profile；后续选择项目时自动带入。',
+            '- 项目群 `/profile` — 只为该项目群重新选择 profile，以及新建或恢复会话。',
             '- 每个规范化路径只绑定一个当前项目群；仍在群里就复用，已退群就重新创建。',
           ]
         : []),
@@ -426,7 +488,7 @@ export function helpCard(agentName = 'Agent', botName?: string): object {
         { tag: 'hr' },
         ...panels,
         { tag: 'hr' },
-        tutorialActions(),
+        tutorialActions(codex),
       ],
     },
   };
@@ -454,9 +516,10 @@ function tutorialPanel(title: string, lines: string[], expanded = false): object
   };
 }
 
-function tutorialActions(): object {
+function tutorialActions(codex: boolean): object {
   const specs: Array<{ text: string; cmd: string; primary?: boolean }> = [
     { text: '📊 状态', cmd: 'status', primary: true },
+    ...(codex ? [{ text: '⚙️ Codex profile', cmd: 'profile' }] : []),
     { text: '🔁 恢复会话', cmd: 'resume' },
     { text: '📂 工作目录', cmd: 'ws.list' },
     { text: '🆕 新会话', cmd: 'new' },

@@ -27,6 +27,7 @@ import { requestScopeGrantLink } from '../bot/wizard';
 import { forgetManagedCard, sendManagedCard, updateManagedCard } from '../card/managed';
 import {
   helpCard,
+  codexProfileCard,
   permissionsCard,
   resumeCard,
   resumeTakeoverCard,
@@ -508,6 +509,10 @@ async function handleProfile(args: string, ctx: CommandContext): Promise<void> {
     await reply(ctx, '此命令仅适用于 Codex CLI。');
     return;
   }
+  if (ctx.chatMode === 'p2p') {
+    await handleDefaultCodexProfile(args, ctx);
+    return;
+  }
   if (args.trim()) {
     await reply(ctx, '直接发送 `/profile`，然后在卡片中选择 profile 与新建/恢复会话。');
     return;
@@ -519,6 +524,48 @@ async function handleProfile(args: string, ctx: CommandContext): Promise<void> {
   }
   ctx.workspaces.prepareCodexLaunch(ctx.scope, cwd);
   await showWorkspaceLaunchCard(ctx, cwd);
+}
+
+async function handleDefaultCodexProfile(args: string, ctx: CommandContext): Promise<void> {
+  const cwd = effectiveWorkspaceCwd(ctx) ?? homedir();
+  let profiles = await discoverCommandCodexProfiles(ctx, cwd);
+  const configured = ctx.workspaces.defaultCodexProfile(ctx.controls.profileConfig.codex?.profile);
+  if (configured && !profiles.includes(configured)) profiles.push(configured);
+  profiles.sort((a, b) => a.localeCompare(b));
+
+  const input = args.trim();
+  if (!input) {
+    const card = codexProfileCard({
+      botName: ctx.channel.botIdentity?.name ?? ctx.agent.displayName,
+      profiles,
+      configuredProfile: configured,
+    });
+    await ctx.channel.send(ctx.msg.chatId, { card }, commandReplyOptions(ctx));
+    return;
+  }
+
+  const directValue = input.startsWith('set ') ? input.slice(4).trim() : input;
+  const rawProfile = String(ctx.formValue?.codex_profile ?? directValue).trim();
+  if (!rawProfile || rawProfile === 'set') {
+    await reply(ctx, '请选择一个 Codex profile；也可发送 `/profile <名称>` 或 `/profile default`。');
+    return;
+  }
+  const profile = rawProfile === '__default__' || rawProfile === 'default' ? null : rawProfile;
+  if (profile && !profiles.includes(profile)) {
+    await reply(
+      ctx,
+      `未找到 Codex profile：\`${profile}\`。请重新发送 \`/profile\` 从列表选择。`,
+    );
+    return;
+  }
+  ctx.workspaces.setDefaultCodexProfile(profile);
+  const label = profile ? `\`${profile}\`` : '默认配置（不传 `--profile`）';
+  const botName = ctx.channel.botIdentity?.name ?? ctx.agent.displayName;
+  await reply(
+    ctx,
+    `✓ **${botName}** 的默认 Codex profile 已切换为 ${label}。\n\n` +
+      '之后从本私聊选择项目时会默认使用它；已有项目群保持各自设置。',
+  );
 }
 
 async function handleAttach(_args: string, ctx: CommandContext): Promise<void> {
@@ -1290,24 +1337,11 @@ async function showWorkspaceLaunchCard(
   cwd: string,
   alias?: string,
 ): Promise<void> {
-  const storedProfile = ctx.workspaces.selectionFor(ctx.scope)?.codexProfile;
-  const configuredProfile = storedProfile !== undefined
-    ? storedProfile ?? undefined
-    : ctx.controls.profileConfig.codex?.profile;
-  let profiles: string[] = [];
-  try {
-    profiles = await discoverCodexProfiles({
-      cwd,
-      codexHome: ctx.controls.profileConfig.codex?.codexHome,
-      inheritCodexHome: ctx.controls.profileConfig.codex?.inheritCodexHome,
-      profileStateDir: commandProfilePaths(ctx).profileDir,
-    });
-  } catch (err) {
-    log.warn('command', 'codex-profile-discovery-failed', {
-      cwd,
-      message: err instanceof Error ? err.message : String(err),
-    });
-  }
+  const configuredProfile = ctx.workspaces.codexProfileFor(
+    ctx.scope,
+    ctx.controls.profileConfig.codex?.profile,
+  );
+  let profiles = await discoverCommandCodexProfiles(ctx, cwd);
   if (configuredProfile && !profiles.includes(configuredProfile)) {
     profiles = [...profiles, configuredProfile].sort((a, b) => a.localeCompare(b));
   }
@@ -1325,6 +1359,26 @@ async function showWorkspaceLaunchCard(
     alias: alias ?? null,
     profiles: profiles.length,
   });
+}
+
+async function discoverCommandCodexProfiles(
+  ctx: CommandContext,
+  cwd: string,
+): Promise<string[]> {
+  try {
+    return await discoverCodexProfiles({
+      cwd,
+      codexHome: ctx.controls.profileConfig.codex?.codexHome,
+      inheritCodexHome: ctx.controls.profileConfig.codex?.inheritCodexHome,
+      profileStateDir: commandProfilePaths(ctx).profileDir,
+    });
+  } catch (err) {
+    log.warn('command', 'codex-profile-discovery-failed', {
+      cwd,
+      message: err instanceof Error ? err.message : String(err),
+    });
+    return [];
+  }
 }
 
 async function handleWorkspaceLaunch(args: string, ctx: CommandContext): Promise<void> {

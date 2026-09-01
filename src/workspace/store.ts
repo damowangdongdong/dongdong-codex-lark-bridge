@@ -30,6 +30,8 @@ interface WorkspaceData {
   chats: Record<string, WorkspaceSelection>;
   named: Record<string, string>;
   projectChats: Record<string, ProjectChatBinding>;
+  /** Bot-wide Codex CLI profile selected from the bot's direct chat. */
+  defaultCodexProfile?: string | null;
 }
 
 export class WorkspaceStore {
@@ -49,6 +51,9 @@ export class WorkspaceStore {
         chats: parsed.chats ?? {},
         named: parsed.named ?? {},
         projectChats: parsed.projectChats ?? {},
+        ...(parsed.defaultCodexProfile !== undefined
+          ? { defaultCodexProfile: parsed.defaultCodexProfile }
+          : {}),
       };
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') return;
@@ -152,7 +157,19 @@ export class WorkspaceStore {
   codexProfileFor(chatId: string, fallback?: string): string | undefined {
     const value = this.data.chats[chatId]?.codexProfile;
     if (value === null) return undefined;
+    if (typeof value === 'string' && value.trim()) return value;
+    return this.defaultCodexProfile(fallback);
+  }
+
+  defaultCodexProfile(fallback?: string): string | undefined {
+    const value = this.data.defaultCodexProfile;
+    if (value === null) return undefined;
     return typeof value === 'string' && value.trim() ? value : fallback;
+  }
+
+  setDefaultCodexProfile(profile: string | null): void {
+    this.data.defaultCodexProfile = profile;
+    this.schedulePersist();
   }
 
   codexLaunchPendingFor(chatId: string): boolean {

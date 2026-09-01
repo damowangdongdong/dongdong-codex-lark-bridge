@@ -67,6 +67,7 @@ interface Harness {
       projectChatName?: string;
     },
   ): Promise<void>;
+  dispatchProfile(profile: string): Promise<void>;
 }
 
 const cleanups: Array<() => Promise<void>> = [];
@@ -753,6 +754,36 @@ describe('agent-aware resume commands', () => {
     expect(h.projectChats.createCalls).toBe(0);
   });
 
+  it('在 Bot 私聊切换默认 Codex profile，并用于后续项目选择', async () => {
+    const h = await createHarness('codex');
+    Object.assign(h.channel, { botIdentity: { openId: 'ou-bot', name: '洞洞的codex' } });
+    const codexHome = join(h.tmp.root, 'codex-home');
+    const target = join(h.tmp.root, 'next-workspace');
+    await Promise.all([mkdir(codexHome), mkdir(target)]);
+    await writeFile(
+      join(codexHome, 'config.toml'),
+      '[profiles.freerouter]\nmodel = "free"\n[profiles.direct]\nmodel = "direct"\n',
+    );
+    h.controls.profileConfig.codex!.codexHome = codexHome;
+    h.controls.profileConfig.codex!.profile = 'freerouter';
+
+    await expect(h.run('/profile')).resolves.toBe(true);
+    const picker = lastContentString(h.channel);
+    expect(picker).toContain('切换 Codex profile');
+    expect(picker).toContain('洞洞的codex');
+    expect(picker).toContain('direct');
+    expect(picker).not.toContain('会话方式');
+    expect(h.projectChats.createCalls).toBe(0);
+
+    await h.dispatchProfile('direct');
+    expect(h.workspaces.defaultCodexProfile()).toBe('direct');
+    expect(lastMarkdown(h.channel)).toContain('默认 Codex profile 已切换为 `direct`');
+
+    await expect(h.run(`/cd ${target}`)).resolves.toBe(true);
+    expect(lastContentString(h.channel)).toContain('"initial_option":"direct"');
+    expect(h.projectChats.createCalls).toBe(0);
+  });
+
   it('keeps a requested Codex resume pending until a concrete history thread is selected', async () => {
     const h = await createHarness('codex');
     h.codexHistory.push(codexThread('thread-resume', 'resume me', 1_700_000_100_000));
@@ -1205,6 +1236,31 @@ async function createHarness(
     });
   };
 
+  const dispatchProfile = (profile: string): Promise<void> => {
+    cardModes.set('chat-1', 'p2p');
+    return handleCardAction({
+      channel: channel as unknown as Parameters<typeof handleCardAction>[0]['channel'],
+      evt: cardEvent(
+        { cmd: 'profile.set' },
+        { codex_profile: profile },
+        'chat-1',
+      ),
+      sessions,
+      sessionCatalog: catalog,
+      workspaces,
+      activeRuns,
+      agent,
+      controls,
+      pending,
+      chatModeCache,
+      codexHistoryProvider: async (options) => {
+        codexHistoryRequests.push(options);
+        return codexHistory;
+      },
+      claudeHistoryProvider: async () => claudeHistory,
+    });
+  };
+
   cleanups.push(async () => {
     pending.cancelAll();
     await Promise.all([sessions.flush(), workspaces.flush(), catalog.flush()]);
@@ -1230,6 +1286,7 @@ async function createHarness(
     dispatchResumeArg,
     dispatchTakeoverArg,
     dispatchLaunch,
+    dispatchProfile,
   };
 }
 
