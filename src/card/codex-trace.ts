@@ -23,7 +23,8 @@ export function renderRunTraceCards(
   }
   for (const block of state.blocks) {
     if (block.kind === 'user') {
-      sections.push(...sectionChunks('👤 User input', sanitizeUserInput(block.content)));
+      const input = sanitizeUserInput(block.content);
+      if (input) sections.push(...sectionChunks('👤 User input', input));
     } else if (block.kind === 'text') {
       sections.push(...sectionChunks('💬 Commentary', block.content));
     } else if (block.kind === 'notice') {
@@ -80,6 +81,7 @@ export function renderCodexHistoryCards(result: unknown, cwd: string): object[] 
     `🔁 Codex 历史 ${index + 1}/${pages.length}`,
     `**${escapeMd(name || '(未命名)')}** · \`${escapeCode(threadId)}\`\n📁 \`${escapeCode(cwd)}\``,
     page,
+    `📚 完整历史对话${pages.length > 1 ? ` · ${index + 1}/${pages.length}` : ''}`,
   ));
 }
 
@@ -116,8 +118,10 @@ function noticeSections(notice: NoticeEntry): TraceSection[] {
 function historyItemSections(item: Record<string, unknown>): TraceSection[] {
   const type = stringValue(item.type) ?? 'item';
   switch (type) {
-    case 'userMessage':
-      return sectionChunks('👤 User', sanitizeUserInput(contentText(item)));
+    case 'userMessage': {
+      const input = sanitizeUserInput(contentText(item));
+      return input ? sectionChunks('👤 User', input) : [];
+    }
     case 'agentMessage':
       return sectionChunks(
         stringValue(item.phase) === 'commentary' ? '💬 Commentary' : '✅ Codex',
@@ -189,7 +193,13 @@ function paginate(sections: TraceSection[]): TraceSection[][] {
   return pages;
 }
 
-function traceCard(title: string, context: string, sections: TraceSection[]): object {
+function traceCard(
+  title: string,
+  context: string,
+  sections: TraceSection[],
+  outerPanelTitle?: string,
+): object {
+  const panels = sections.map(tracePanel);
   return deepMaskEmails({
     schema: '2.0',
     config: { summary: { content: title } },
@@ -198,10 +208,22 @@ function traceCard(title: string, context: string, sections: TraceSection[]): ob
       elements: [
         { tag: 'markdown', content: context, text_size: 'notation' },
         { tag: 'hr' },
-        ...sections.map(tracePanel),
+        ...(outerPanelTitle ? [tracePanelGroup(outerPanelTitle, panels)] : panels),
       ],
     },
   });
+}
+
+function tracePanelGroup(title: string, elements: object[]): object {
+  return {
+    tag: 'collapsible_panel',
+    expanded: false,
+    header: panelHeader(title),
+    border: { color: 'grey', corner_radius: '5px' },
+    vertical_spacing: '8px',
+    padding: '8px 8px 8px 8px',
+    elements,
+  };
 }
 
 function tracePanel(section: TraceSection): object {
@@ -211,17 +233,21 @@ function tracePanel(section: TraceSection): object {
   return {
     tag: 'collapsible_panel',
     expanded: section.expanded === true,
-    header: {
-      title: { tag: 'markdown', content: `**${escapeMd(section.title)}**` },
-      vertical_align: 'center',
-      icon: { tag: 'standard_icon', token: 'down-small-ccm_outlined', size: '16px 16px' },
-      icon_position: 'follow_text',
-      icon_expanded_angle: -180,
-    },
+    header: panelHeader(section.title),
     border: { color: section.expanded ? 'red' : 'grey', corner_radius: '5px' },
     vertical_spacing: '8px',
     padding: '8px 8px 8px 8px',
     elements: [{ tag: 'markdown', content: body, text_size: 'notation' }],
+  };
+}
+
+function panelHeader(title: string): object {
+  return {
+    title: { tag: 'markdown', content: `**${escapeMd(title)}**` },
+    vertical_align: 'center',
+    icon: { tag: 'standard_icon', token: 'down-small-ccm_outlined', size: '16px 16px' },
+    icon_position: 'follow_text',
+    icon_expanded_angle: -180,
   };
 }
 
@@ -244,7 +270,13 @@ function contentText(item: Record<string, unknown>): string {
 }
 
 function sanitizeUserInput(input: string): string {
-  return extractBridgeUserInput(input) ?? input;
+  const extracted = extractBridgeUserInput(input);
+  if (extracted !== undefined) return extracted;
+  return isInternalContextOnly(input) ? '' : input;
+}
+
+function isInternalContextOnly(input: string): boolean {
+  return /^\s*<(?:bridge_context|bridge_instructions|environment_context|codex_internal_context)\b/.test(input);
 }
 
 function reasoningText(item: Record<string, unknown>): string {

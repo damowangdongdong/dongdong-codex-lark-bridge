@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { renderCodexHistoryCards, renderRunTraceCards } from '../../../src/card/codex-trace.js';
 import { initialState, reduce, type RunState } from '../../../src/card/run-state.js';
 import type { AgentEvent } from '../../../src/agent/types.js';
+import { buildAgentPrompt } from '../../../src/agent/prompt.js';
+import { prefixBridgeSystemPrompt } from '../../../src/agent/bridge-system-prompt.js';
 
 describe('Codex trace cards', () => {
   it('keeps distinct reasoning, terminal input, commentary, tool input, and tool output sections', () => {
@@ -37,15 +39,16 @@ describe('Codex trace cards', () => {
   });
 
   it('hides bridge metadata from live and resumed user-input sections', () => {
-    const wrapped = [
-      '# lark-channel-bridge 运行约定',
-      '<bridge_instructions>',
-      '["内部指令"]',
-      '</bridge_instructions>',
-      '<user_input>',
-      '{"text":"只展示这句"}',
-      '</user_input>',
-    ].join('\n');
+    const wrapped = prefixBridgeSystemPrompt(buildAgentPrompt({
+      context: {
+        chatId: 'oc_internal',
+        chatType: 'group',
+        senderId: 'ou_internal',
+        source: 'im',
+      },
+      instructions: ['内部指令'],
+      userInput: '只展示这句',
+    }), { openId: 'ou_bot_internal', name: 'Bridge' });
     const live = JSON.stringify(renderRunTraceCards(stateFrom([
       { type: 'user_text', content: wrapped },
       { type: 'done', terminationReason: 'normal' },
@@ -64,8 +67,40 @@ describe('Codex trace cards', () => {
     expect(history).toContain('只展示这句');
     expect(live).not.toContain('bridge_instructions');
     expect(history).not.toContain('bridge_instructions');
+    expect(live).not.toContain('bridge_context');
+    expect(history).not.toContain('bridge_context');
+    expect(live).not.toContain('LARK_CHANNEL');
+    expect(history).not.toContain('LARK_CHANNEL');
     expect(live).not.toContain('user_input');
     expect(history).not.toContain('user_input');
+  });
+
+  it('omits internal-only context messages from resumed history', () => {
+    const history = JSON.stringify(renderCodexHistoryCards({
+      thread: {
+        id: 'thread-internal-context',
+        turns: [{
+          status: 'completed',
+          items: [
+            {
+              type: 'userMessage',
+              content: [{ type: 'input_text', text: '<environment_context>\nsecret cwd\n</environment_context>' }],
+            },
+            {
+              type: 'userMessage',
+              content: [{ type: 'input_text', text: '<codex_internal_context>\nsecret objective\n</codex_internal_context>' }],
+            },
+            { type: 'agentMessage', phase: 'final_answer', text: 'visible answer' },
+          ],
+        }],
+      },
+    }, '/repo'));
+
+    expect(history).toContain('visible answer');
+    expect(history).not.toContain('secret cwd');
+    expect(history).not.toContain('secret objective');
+    expect(history).not.toContain('environment_context');
+    expect(history).not.toContain('codex_internal_context');
   });
 
   it('paginates long tool output without dropping its beginning or end', () => {
@@ -133,6 +168,19 @@ describe('Codex resumed-history cards', () => {
     expect(rendered).toContain('-end');
     expect(rendered).toContain('thread-history');
     expect(rendered).toContain('"expanded":false');
+    for (const card of cards) {
+      const body = (card as { body: { elements: Array<Record<string, unknown>> } }).body;
+      const outer = body.elements[2] as {
+        tag?: string;
+        expanded?: boolean;
+        header?: unknown;
+        elements?: unknown[];
+      };
+      expect(outer.tag).toBe('collapsible_panel');
+      expect(outer.expanded).toBe(false);
+      expect(JSON.stringify(outer.header)).toContain('完整历史对话');
+      expect(JSON.stringify(outer.elements)).toContain('collapsible_panel');
+    }
   });
 
   it('keeps retry and capacity errors visible in the full trace', () => {

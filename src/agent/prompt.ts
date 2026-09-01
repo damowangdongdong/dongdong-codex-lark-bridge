@@ -125,14 +125,18 @@ export function safeJsonStringify(value: unknown): string {
 
 /** Return only the human-authored text from a structured bridge prompt. */
 export function extractBridgeUserInput(input: string): string | undefined {
-  const match = input.match(/<user_input>\n([\s\S]*?)\n<\/user_input>/);
-  if (!match?.[1]) return undefined;
-  try {
-    const parsed = JSON.parse(match[1]) as unknown;
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return undefined;
-    const text = (parsed as Record<string, unknown>).text;
-    return typeof text === 'string' ? text : undefined;
-  } catch {
-    return undefined;
+  const matches = [...input.matchAll(/<user_input>\r?\n([\s\S]*?)\r?\n<\/user_input>/g)];
+  for (let index = matches.length - 1; index >= 0; index--) {
+    const body = matches[index]?.[1];
+    if (!body) continue;
+    try {
+      const parsed = JSON.parse(body) as unknown;
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) continue;
+      const text = (parsed as Record<string, unknown>).text;
+      if (typeof text === 'string') return text;
+    } catch {
+      // Earlier system-prompt examples may contain non-JSON user_input blocks.
+    }
   }
+  return undefined;
 }
