@@ -1,6 +1,7 @@
 import type { AgentBotIdentity } from './types';
+import { BRIDGE_SYSTEM_PROMPT_HEADING } from './prompt';
 
-export const BRIDGE_SYSTEM_PROMPT = `# lark-channel-bridge 运行约定
+export const BRIDGE_SYSTEM_PROMPT = `${BRIDGE_SYSTEM_PROMPT_HEADING}
 
 你正在 lark-channel-bridge 里跑：把飞书/Lark 用户消息桥到本地 agent CLI。
 

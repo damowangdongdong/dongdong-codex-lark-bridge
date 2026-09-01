@@ -69,6 +69,8 @@ describe('Codex trace cards', () => {
     expect(history).not.toContain('bridge_instructions');
     expect(live).not.toContain('bridge_context');
     expect(history).not.toContain('bridge_context');
+    expect(live).not.toContain('lark-channel-bridge 运行约定');
+    expect(history).not.toContain('lark-channel-bridge 运行约定');
     expect(live).not.toContain('LARK_CHANNEL');
     expect(history).not.toContain('LARK_CHANNEL');
     expect(live).not.toContain('user_input');
@@ -101,6 +103,44 @@ describe('Codex trace cards', () => {
     expect(history).not.toContain('secret objective');
     expect(history).not.toContain('environment_context');
     expect(history).not.toContain('codex_internal_context');
+  });
+
+  it('redacts embedded bridge prompts without treating quoted input as the current user message', () => {
+    const wrapped = prefixBridgeSystemPrompt(buildAgentPrompt({
+      context: {
+        chatId: 'oc_quoted',
+        chatType: 'group',
+        senderId: 'ou_quoted',
+        source: 'im',
+      },
+      instructions: ['内部指令'],
+      userInput: '旧卡片中的问题',
+    }), { openId: 'ou_bot_quoted', name: 'Bridge' });
+    const quoted = `引用卡片开始\n${wrapped}\n旧卡片回答\n现在仍然出现运行约定`;
+    const history = JSON.stringify(renderCodexHistoryCards({
+      thread: {
+        id: 'thread-quoted',
+        turns: [{
+          status: 'completed',
+          items: [
+            { type: 'userMessage', content: [{ type: 'input_text', text: quoted }] },
+            { type: 'commandExecution', command: 'show-card', aggregatedOutput: `before\n${wrapped}\nafter` },
+            { type: 'agentMessage', phase: 'final_answer', text: `before\n${wrapped}\nafter` },
+          ],
+        }],
+      },
+    }, '/repo'));
+
+    expect(history).toContain('引用卡片开始');
+    expect(history).toContain('旧卡片回答');
+    expect(history).toContain('现在仍然出现运行约定');
+    expect(history).toContain('旧卡片中的问题');
+    expect(history).toContain('before');
+    expect(history).toContain('after');
+    expect(history).not.toContain('show-card');
+    expect(history).not.toContain('lark-channel-bridge 运行约定');
+    expect(history).not.toContain('bridge_context');
+    expect(history).not.toContain('bridge_instructions');
   });
 
   it('paginates long tool output without dropping its beginning or end', () => {
@@ -136,7 +176,7 @@ describe('Codex trace cards', () => {
 });
 
 describe('Codex resumed-history cards', () => {
-  it('renders user, commentary, reasoning, command output, and final answer across readable pages', () => {
+  it('renders the conversation without duplicating internal execution trace items', () => {
     const result = {
       thread: {
         id: 'thread-history',
@@ -161,11 +201,11 @@ describe('Codex resumed-history cards', () => {
 
     expect(cards.length).toBeGreaterThan(1);
     expect(rendered).toContain('original question');
-    expect(rendered).toContain('considering options');
-    expect(rendered).toContain('working update');
-    expect(rendered).toContain('/repo');
     expect(rendered).toContain('answer-');
     expect(rendered).toContain('-end');
+    expect(rendered).not.toContain('considering options');
+    expect(rendered).not.toContain('working update');
+    expect(rendered).not.toContain('🛠 Command');
     expect(rendered).toContain('thread-history');
     expect(rendered).toContain('"expanded":false');
     for (const card of cards) {
@@ -181,6 +221,28 @@ describe('Codex resumed-history cards', () => {
       expect(JSON.stringify(outer.header)).toContain('完整历史对话');
       expect(JSON.stringify(outer.elements)).toContain('collapsible_panel');
     }
+  });
+
+  it('keeps the last assistant update when an interrupted turn has no final answer', () => {
+    const rendered = JSON.stringify(renderCodexHistoryCards({
+      thread: {
+        id: 'thread-interrupted',
+        turns: [{
+          status: 'interrupted',
+          items: [
+            { type: 'userMessage', content: [{ type: 'input_text', text: '开始任务' }] },
+            { type: 'agentMessage', phase: 'commentary', text: '较早进度' },
+            { type: 'commandExecution', command: 'work', aggregatedOutput: 'internal output' },
+            { type: 'agentMessage', phase: 'commentary', text: '中断前最后进度' },
+          ],
+        }],
+      },
+    }, '/repo'));
+
+    expect(rendered).toContain('开始任务');
+    expect(rendered).toContain('中断前最后进度');
+    expect(rendered).not.toContain('较早进度');
+    expect(rendered).not.toContain('internal output');
   });
 
   it('keeps retry and capacity errors visible in the full trace', () => {

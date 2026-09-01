@@ -1,5 +1,5 @@
 import type { NoticeEntry, RunState, ToolEntry } from './run-state';
-import { extractBridgeUserInput } from '../agent/prompt';
+import { extractBridgeUserInput, redactEmbeddedBridgePrompts } from '../agent/prompt';
 import { deepMaskEmails } from './mask-email';
 
 const SECTION_CHARS = 7_000;
@@ -66,12 +66,18 @@ export function renderCodexHistoryCards(result: unknown, cwd: string): object[] 
     const status = stringValue(turn.status) ?? 'unknown';
     sections.push({
       title: `第 ${turnIndex + 1} 轮 · ${status}`,
-      body: `_以下历史默认折叠，点击各项标题查看。_`,
+      body: `_以下对话默认折叠，点击各项标题查看。_`,
     });
     const items = Array.isArray(turn.items) ? turn.items : [];
+    const fallbackAgentMessage = items.some(isFinalAgentMessage)
+      ? undefined
+      : [...items].reverse().find(isAgentMessage);
     for (const rawItem of items) {
       const item = recordValue(rawItem);
       if (!item) continue;
+      if (stringValue(item.type) !== 'userMessage'
+        && !isFinalAgentMessage(item)
+        && rawItem !== fallbackAgentMessage) continue;
       sections.push(...historyItemSections(item));
     }
   });
@@ -83,6 +89,15 @@ export function renderCodexHistoryCards(result: unknown, cwd: string): object[] 
     page,
     `📚 完整历史对话${pages.length > 1 ? ` · ${index + 1}/${pages.length}` : ''}`,
   ));
+}
+
+function isAgentMessage(value: unknown): boolean {
+  return stringValue(recordValue(value)?.type) === 'agentMessage';
+}
+
+function isFinalAgentMessage(value: unknown): boolean {
+  const item = recordValue(value);
+  return stringValue(item?.type) === 'agentMessage' && stringValue(item?.phase) === 'final_answer';
 }
 
 function toolSections(tool: ToolEntry): TraceSection[] {
@@ -123,34 +138,17 @@ function historyItemSections(item: Record<string, unknown>): TraceSection[] {
       return input ? sectionChunks('👤 User', input) : [];
     }
     case 'agentMessage':
-      return sectionChunks(
+      return historySectionChunks(
         stringValue(item.phase) === 'commentary' ? '💬 Commentary' : '✅ Codex',
         stringValue(item.text) ?? contentText(item),
       );
-    case 'reasoning':
-      return sectionChunks('🧠 Reasoning', reasoningText(item) || stringify(item));
-    case 'commandExecution':
-      return [
-        ...sectionChunks('🛠 Command', stringValue(item.command) ?? ''),
-        ...sectionChunks('📤 Output', stringValue(item.aggregatedOutput) ?? ''),
-      ];
-    case 'fileChange':
-      return sectionChunks('📝 File changes', stringify(item.changes ?? item), 'json');
-    case 'mcpToolCall':
-    case 'dynamicToolCall':
-    case 'collabAgentToolCall':
-    case 'subAgentActivity':
-    case 'webSearch':
-    case 'imageView':
-    case 'imageGeneration':
-    case 'contextCompaction':
-    case 'hookPrompt':
-    case 'functionCallOutput':
-    case 'plan':
-      return sectionChunks(`🔧 ${type}`, stringify(item), 'json');
     default:
-      return sectionChunks(`• ${type}`, stringify(item), 'json');
+      return [];
   }
+}
+
+function historySectionChunks(title: string, body: string, language = ''): TraceSection[] {
+  return sectionChunks(title, redactEmbeddedBridgePrompts(body), language);
 }
 
 function sectionChunks(
@@ -272,19 +270,11 @@ function contentText(item: Record<string, unknown>): string {
 function sanitizeUserInput(input: string): string {
   const extracted = extractBridgeUserInput(input);
   if (extracted !== undefined) return extracted;
-  return isInternalContextOnly(input) ? '' : input;
+  return isInternalContextOnly(input) ? '' : redactEmbeddedBridgePrompts(input);
 }
 
 function isInternalContextOnly(input: string): boolean {
   return /^\s*<(?:bridge_context|bridge_instructions|environment_context|codex_internal_context)\b/.test(input);
-}
-
-function reasoningText(item: Record<string, unknown>): string {
-  const values = [item.summary, item.content, item.text]
-    .flatMap((value) => Array.isArray(value) ? value : [value])
-    .map((value) => typeof value === 'string' ? value : stringValue(recordValue(value)?.text) ?? '')
-    .filter(Boolean);
-  return values.join('\n');
 }
 
 function stringify(value: unknown): string {
