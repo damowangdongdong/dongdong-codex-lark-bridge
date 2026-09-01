@@ -38,6 +38,30 @@ describe('Codex trace cards', () => {
     expect(rendered).toContain('"expanded":false');
   });
 
+  it('groups every live trace page under a collapsed full-trace panel', () => {
+    const state = stateFrom([
+      { type: 'thinking', delta: 'reasoning detail' },
+      { type: 'text', delta: 'commentary detail' },
+      { type: 'done', terminationReason: 'normal' },
+    ]);
+
+    const cards = renderRunTraceCards(state, { sandbox: 'workspace-write' });
+
+    expect(cards).toHaveLength(1);
+    const body = (cards[0] as { body: { elements: Array<Record<string, unknown>> } }).body;
+    const outer = body.elements[2] as {
+      tag?: string;
+      expanded?: boolean;
+      header?: unknown;
+      elements?: unknown[];
+    };
+    expect(outer.tag).toBe('collapsible_panel');
+    expect(outer.expanded).toBe(false);
+    expect(JSON.stringify(outer.header)).toContain('完整执行轨迹');
+    expect(JSON.stringify(outer.elements)).toContain('reasoning detail');
+    expect(JSON.stringify(outer.elements)).toContain('commentary detail');
+  });
+
   it('hides bridge metadata from live and resumed user-input sections', () => {
     const wrapped = prefixBridgeSystemPrompt(buildAgentPrompt({
       context: {

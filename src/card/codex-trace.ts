@@ -49,6 +49,7 @@ export function renderRunTraceCards(
     `🧾 Codex 完整轨迹 ${index + 1}/${pages.length}`,
     contextLine(context, state.session?.threadId),
     page,
+    `🧾 完整执行轨迹${pages.length > 1 ? ` · ${index + 1}/${pages.length}` : ''}`,
   ));
 }
 
