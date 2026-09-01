@@ -249,6 +249,7 @@ function normalizeThread(input: unknown): CodexThreadHistoryEntry | undefined {
   if (!threadId || !cwd) return undefined;
   const createdAt = numberValue(raw.createdAt);
   const updatedAt = numberValue(raw.updatedAt);
+  const name = normalizeSessionPreview(stringValue(raw.name) ?? '');
   return {
     threadId,
     ...(stringValue(raw.sessionId) ? { sessionId: stringValue(raw.sessionId) } : {}),
@@ -257,7 +258,7 @@ function normalizeThread(input: unknown): CodexThreadHistoryEntry | undefined {
     createdAtMs: Math.round((createdAt ?? 0) * 1000),
     updatedAtMs: Math.round((updatedAt ?? 0) * 1000),
     source: sourceValue(raw.source),
-    ...(stringValue(raw.name) ? { name: stringValue(raw.name) } : {}),
+    ...(name ? { name } : {}),
   };
 }
 

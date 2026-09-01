@@ -176,6 +176,46 @@ describe('Codex trace cards', () => {
 });
 
 describe('Codex resumed-history cards', () => {
+  it('uses cleaned user input for wrapped thread names and previews', () => {
+    const wrappedName = prefixBridgeSystemPrompt(buildAgentPrompt({
+      context: {
+        chatId: 'oc_internal',
+        chatType: 'group',
+        senderId: 'ou_internal',
+        source: 'im',
+      },
+      instructions: ['internal bridge instruction'],
+      userInput: '真实历史标题',
+    }), { openId: 'ou_bot_internal', name: 'Bridge' });
+    const wrappedPreview = prefixBridgeSystemPrompt(buildAgentPrompt({
+      context: {
+        chatId: 'oc_preview',
+        chatType: 'p2p',
+        senderId: 'ou_preview',
+        source: 'im',
+      },
+      instructions: ['preview bridge instruction'],
+      userInput: '真实历史预览',
+    }), { openId: 'ou_bot_preview', name: 'Bridge' });
+
+    const named = JSON.stringify(renderCodexHistoryCards({
+      thread: { id: 'thread-named', name: wrappedName, preview: wrappedPreview, turns: [] },
+    }, '/repo'));
+    const previewOnly = JSON.stringify(renderCodexHistoryCards({
+      thread: { id: 'thread-preview', name: '   ', preview: wrappedPreview, turns: [] },
+    }, '/repo'));
+
+    expect(named).toContain('真实历史标题');
+    expect(named).not.toContain('真实历史预览');
+    expect(previewOnly).toContain('真实历史预览');
+    for (const rendered of [named, previewOnly]) {
+      expect(rendered).not.toContain('# lark-channel-bridge 运行约定');
+      expect(rendered).not.toContain('你正在 lark-channel-bridge 里跑');
+      expect(rendered).not.toContain('bridge_context');
+      expect(rendered).not.toContain('bridge_instructions');
+    }
+  });
+
   it('renders the conversation without duplicating internal execution trace items', () => {
     const result = {
       thread: {

@@ -1,5 +1,6 @@
 import type { NoticeEntry, RunState, ToolEntry } from './run-state';
 import { extractBridgeUserInput, redactEmbeddedBridgePrompts } from '../agent/prompt';
+import { normalizeSessionPreview } from '../session/preview';
 import { deepMaskEmails } from './mask-email';
 
 const SECTION_CHARS = 7_000;
@@ -57,7 +58,9 @@ export function renderCodexHistoryCards(result: unknown, cwd: string): object[] 
   const thread = recordValue(response?.thread);
   if (!thread) return [];
   const threadId = stringValue(thread.id) ?? '';
-  const name = stringValue(thread.name) ?? stringValue(thread.preview) ?? threadId;
+  const name = [stringValue(thread.name), stringValue(thread.preview)]
+    .map((value) => normalizeSessionPreview(value ?? ''))
+    .find(Boolean) ?? threadId;
   const turns = Array.isArray(thread.turns) ? thread.turns : [];
   const sections: TraceSection[] = [];
   turns.forEach((rawTurn, turnIndex) => {

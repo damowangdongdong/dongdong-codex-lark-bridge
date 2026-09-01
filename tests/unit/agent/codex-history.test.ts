@@ -7,6 +7,7 @@ import {
   listCodexThreadHistory,
 } from '../../../src/session/codex-history.js';
 import { buildAgentPrompt } from '../../../src/agent/prompt.js';
+import { prefixBridgeSystemPrompt } from '../../../src/agent/bridge-system-prompt.js';
 
 interface FakeCodex {
   dir: string;
@@ -132,18 +133,20 @@ describe('Codex thread history provider', () => {
     } satisfies Partial<CodexHistoryError>);
   });
 
-  it('summarizes bridge-prefixed Codex previews using the real user input section', async () => {
+  it('summarizes bridge-prefixed Codex names and previews using the real user input section', async () => {
+    const wrapped = prefixBridgeSystemPrompt(buildAgentPrompt({
+      context: {
+        chatId: 'oc_secret',
+        chatType: 'p2p',
+        senderId: 'ou_secret',
+        source: 'im',
+      },
+      instructions: ['internal bridge instruction'],
+      userInput: 'Codex 真实用户问题\n\n第二行',
+    }), { openId: 'ou_bot_secret', name: 'Bridge' });
     const fake = await createFakeCodex({
-      firstPreview: `# lark-channel-bridge 运行约定\n\n## user_message\n\n${buildAgentPrompt({
-        context: {
-          chatId: 'oc_secret',
-          chatType: 'p2p',
-          senderId: 'ou_secret',
-          source: 'im',
-        },
-        instructions: ['internal bridge instruction'],
-        userInput: 'Codex 真实用户问题\n\n第二行',
-      })}`,
+      firstName: wrapped,
+      firstPreview: wrapped,
     });
     cleanup.push(fake.dir);
 
@@ -155,15 +158,19 @@ describe('Codex thread history provider', () => {
       timeoutMs: 5000,
     });
 
+    expect(entries[0]?.name).toBe('Codex 真实用户问题 第二行');
     expect(entries[0]?.preview).toBe('Codex 真实用户问题 第二行');
   });
 });
 
-async function createFakeCodex(options: { failList?: boolean; firstPreview?: string } = {}): Promise<FakeCodex> {
+async function createFakeCodex(
+  options: { failList?: boolean; firstName?: string; firstPreview?: string } = {},
+): Promise<FakeCodex> {
   const dir = await mkdtemp(join(tmpdir(), 'codex-history-test-'));
   const scriptPath = process.platform === 'win32' ? join(dir, 'codex-app-server.mjs') : join(dir, 'codex');
   const path = process.platform === 'win32' ? join(dir, 'codex.cmd') : scriptPath;
   const recordPath = join(dir, 'record.json');
+  const firstName = options.firstName ?? 'New work';
   const firstPreview = options.firstPreview ?? 'new thread prompt';
   const script = `#!/usr/bin/env node
 import { createInterface } from 'node:readline';
@@ -244,7 +251,7 @@ rl.on('line', (line) => {
                 agentNickname: null,
                 agentRole: null,
                 gitInfo: null,
-                name: 'New work',
+                name: ${JSON.stringify(firstName)},
                 turns: []
               },
               {
