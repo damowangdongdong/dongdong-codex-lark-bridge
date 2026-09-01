@@ -2702,7 +2702,7 @@ function formatDoctorEchoStatus(echoText: string, state: RunState): string {
 }
 
 async function handleHelp(_args: string, ctx: CommandContext): Promise<void> {
-  const card = helpCard(ctx.agent.displayName);
+  const card = helpCard(ctx.agent.displayName, ctx.channel.botIdentity?.name);
   await ctx.channel.send(ctx.msg.chatId, { card }, commandReplyOptions(ctx));
 }
 

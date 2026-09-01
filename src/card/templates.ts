@@ -320,62 +320,164 @@ export function resumeTakeoverCard(threadId: string, nonce: string): object {
   ]);
 }
 
-export function helpCard(agentName = 'Agent'): object {
+export function helpCard(agentName = 'Agent', botName?: string): object {
+  const visibleBotName = botName?.trim() || agentName;
+  const escapedBotName = escapeMd(visibleBotName);
   const escapedAgentName = escapeMd(agentName);
   const codex = /codex/i.test(agentName);
-  return shell('💡 使用帮助', [
-    divMd(
-      [
-        '**命令列表**',
+
+  const quickStart = codex
+    ? [
+        `1. 打开与 **${escapedBotName}** 的私聊；这里是默认入口，不需要 @。`,
+        '2. 发送 `/cd <绝对路径>`，例如 `/cd /Users/me/project`；也可以用 `/ws use <名称>` 选择已保存目录。',
+        '3. 在启动卡中选择 **Codex CLI profile**、**新建/恢复会话**；首次建群时还可以修改项目群名称。',
+        `4. 点击“继续”，进入该路径的项目群；群里默认用 **@${escapedBotName} + 任务** 开始工作。`,
         '',
-        '- `/new` `/clear` `/reset` — 清空当前 chat 的会话',
-        '- `/new chat [name]` — 为当前路径创建独立群窗口，继承 Codex 设置并新建 thread',
-        '- `/resume [N]` — 列出并恢复历史会话（最多 N 条）',
-        `- \`/cd <path>\` — 切换工作目录${codex ? '，再选择 Codex profile 和新建/恢复' : '（会重置 session）'}`,
-        '- `/ws list|save <name>|use <name>|remove <name>` — 工作目录',
-        ...(codex
-          ? [
-              '- `/profile` — 在当前项目群重新选择 Codex profile 与新建/恢复会话',
-              '- `/permissions` — 查看或持久化本 scope 的 Codex 权限',
-              '- `/attach` — 在本机终端附着当前 Codex thread',
-              '- 运行卡片：`↵ 立即插入` 对应 Enter；`⇥ 排队` 对应 Tab',
-              '- `/codex commands` — 查看 Codex 0.151 全部 `/` 命令及执行方式',
-              '- `/ps` 查看 Codex 后台终端；`/ps bridge` 查看 bot 进程',
-              '- `/stop terminals` 或 `/clean` — 停止当前 thread 的后台终端',
-              '- `/delete` 预览删除；`/delete confirm` 永久删除当前 thread',
-              '- 终端本地/交互命令会提示用 `/attach` 执行',
-            ]
-          : []),
-        '- `/account` — 查看当前应用；`/account change` 换 appId/secret 并重连',
-        '- `/config` — 调整偏好、访问控制和 lark-cli 身份策略',
-        '- `/status` — 当前状态',
-        codex
-          ? '- `/stop` — 优先中断当前 turn；无活动 turn 时停止 Codex 后台终端（也可点卡片底部 ⏹ 终止 按钮）'
-          : '- `/stop` — 结束当前正在跑的任务（也可点卡片底部 ⏹ 终止 按钮）',
-        '- `/stop comment:<scopeHash>` — 管理员停止云文档评论任务',
-        '- `/timeout [N|off|default]` — 当前 session 的探活分钟数,`/config` 改全局默认',
-        '- `/timeout comment:<scopeHash> N` — 管理员设置云文档评论任务探活',
-        codex
-          ? '- `/ps` — 列出当前 thread 的 Codex 后台终端；`/ps bridge` 列出 bot'
-          : '- `/ps` — 列出本机所有 bot，标识当前正在回复的那个',
-        codex
-          ? '- `/exit <id|#>` — 关掉指定 bot（用 `/ps bridge` 看 id/序号）'
-          : '- `/exit <id|#>` — 关掉指定 bot（用 `/ps` 看 id/序号）',
-        '- `/reconnect` — 强制重连 WebSocket(网络抖动后 bot 没反应时用)',
-        `- \`/doctor [描述]\` — 把日志和描述交给 ${escapedAgentName} 自助诊断`,
-        '- `/help` — 本帮助',
-        '',
-        `其他内容直接交给 ${escapedAgentName}。`,
-      ].join('\n'),
-    ),
-    HR,
-    actions([
-      { text: '📊 状态', value: { cmd: 'status' }, style: 'primary' },
-      { text: '🔁 恢复会话', value: { cmd: 'resume' } },
-      { text: '📂 工作目录', value: { cmd: 'ws.list' } },
-      { text: '🆕 新会话', value: { cmd: 'new' } },
+        '_同一路径会复用仍可访问的项目群；如果你已退出旧群，再次从私聊选择该路径会新建一个可访问的群。_',
+      ]
+    : [
+        `1. 打开与 **${escapedBotName}** 的私聊；这里是默认入口，不需要 @。`,
+        '2. 发送 `/cd <绝对路径>` 选择工作目录，或用 `/ws use <名称>` 切换已保存目录。',
+        `3. 直接把任务发给 ${escapedAgentName}；群聊中默认需要 @${escapedBotName}。`,
+        '4. 用 `/resume` 继续历史会话，或用 `/new` 开始全新会话。',
+      ];
+
+  const panels: object[] = [
+    tutorialPanel('🚀 四步快速开始', quickStart, true),
+    tutorialPanel('📁 工作目录与项目群', [
+      '- `/cd <绝对路径>` — 切换当前工作目录。',
+      '- `/ws list` — 查看当前目录和已保存目录。',
+      '- `/ws save <名称>` / `/ws use <名称>` / `/ws remove <名称>` — 保存、切换或删除目录快捷方式。',
+      ...(codex
+        ? [
+            '- `/new chat [名称]` — 为当前路径进入独立项目群，并创建新的 Codex thread。',
+            '- `/profile` — 在项目群内重新选择 Codex CLI profile，以及新建或恢复会话。',
+            '- 每个规范化路径只绑定一个当前项目群；仍在群里就复用，已退群就重新创建。',
+          ]
+        : []),
     ]),
-  ]);
+    tutorialPanel('🔁 会话、历史与终端同步', [
+      '- `/new`、`/clear`、`/reset` — 清空当前聊天或话题的会话，下一条任务从新会话开始。',
+      '- `/resume [N]` — 浏览并恢复历史会话；恢复后会先展示默认折叠的完整历史。',
+      ...(codex
+        ? [
+            '- `/attach` — 生成精确的本机终端命令，把 Codex TUI 附着到当前 thread。',
+            '- 飞书与附着终端共享同一 thread：任一端输入，进度和最终回答都会同步。',
+            '- 任务运行时，`↵ 立即插入` 会立刻补充当前任务；`⇥ 排队` 会等当前任务结束后执行。',
+            '- 每轮结束会发送默认折叠的完整轨迹；点击章节可查看 reasoning、进度、工具输入输出和用量。',
+          ]
+        : []),
+    ]),
+    tutorialPanel('💬 对话、附件与云文档', [
+      `- 私聊直接发送任务；群聊和话题群默认需要 **@${escapedBotName}**，可在 \`/config\` 调整。`,
+      '- 可以回复引用一条消息再提问；首次进入话题时，Bot 会读取该话题已有上下文。',
+      '- 图片或文件可和任务一起发送；Bridge 会按当前附件策略处理，再把可用附件交给 Agent。',
+      '- 在支持的飞书云文档评论中 @Bot 即可提问；回复仍写回同一评论线程，不需要 `/doc` 绑定。',
+      '- `/stop comment:<scopeHash>` 和 `/timeout comment:<scopeHash> N` 可由管理员控制评论任务。',
+    ]),
+    tutorialPanel('🧰 运行控制与显示', [
+      '- `/status` — 查看当前 profile、工作目录、会话、权限、lark-cli 身份、运行和排队状态。',
+      '- `/config` — 设置模型、回复样式、工具调用、COT 过程消息、并发、探活、群聊 @ 和 lark-cli 身份策略。',
+      ...(codex
+        ? [
+            '- `/permissions` — 查看或设置当前聊天/话题的 `read-only`、`workspace-write`、`danger-full-access`。',
+            '- `/stop` — 中断当前 turn；没有活动 turn 时停止当前 thread 的后台终端。',
+            '- `/ps` — 查看当前 thread 的后台终端；`/stop terminals` 或 `/clean` 停止它们。',
+            '- `/codex commands` — 查看当前 Codex 完整命令清单，以及哪些命令在飞书、app-server 或附着 TUI 中执行。',
+          ]
+        : ['- `/stop` — 中断当前任务；也可以点运行卡底部的“⏹ 终止”。']),
+      '- `/timeout [N|off|default]` — 查看或调整当前 session 的空闲探活。',
+    ]),
+    tutorialPanel('🎙 会议与 lark-cli', [
+      '- 会议能力需管理员先在 `/config` 或 Web 控制台启用并重启 Bot。',
+      '- `/meeting join <9位会议号>` — 让 Bot 入会；`/meeting` 查看当前会议。',
+      '- `/meeting ask <问题>`、`/meeting notes [会议号]`、`/meeting transcript [会议号]`、`/meeting stop [会议号]`、`/meeting leave [会议号]` — 提问、纪要、查看字幕、中断和离会。',
+      '- lark-cli 默认使用应用身份；需要访问个人文档、日历等资源时，在 `/config` 切换并完成用户授权。',
+      '- `/status` 会显示 lark-cli 当前是应用身份，还是用户身份已就绪。',
+    ]),
+    tutorialPanel('🛠 管理与故障排查', [
+      '- `/doctor [现象描述]` — 运行低敏诊断，并让 Agent 结合描述分析。',
+      '- `/reconnect` — 网络恢复后强制重连飞书 WebSocket。',
+      `- \`${codex ? '/ps bridge' : '/ps'}\` — 查看本机 Bridge 进程；\`/exit <id|#>\` 关闭指定进程。`,
+      '- `/account` — 查看当前飞书应用；`/account change` 更换凭据并重连。',
+      '- `/invite` / `/remove` — 管理允许使用 Bot 的用户、管理员和群聊。',
+      ...(codex
+        ? ['- `/delete` 先预览；只有 `/delete confirm` 才会永久删除当前 Codex thread 及子 thread。']
+        : []),
+      '- 任何时候发送 `/help` 都能重新打开本教程。',
+    ]),
+  ];
+
+  return {
+    schema: '2.0',
+    config: { summary: { content: `${visibleBotName} 使用教程` } },
+    header: {
+      template: 'blue',
+      title: { tag: 'plain_text', content: `💡 ${visibleBotName} 使用教程` },
+    },
+    body: {
+      elements: [
+        {
+          tag: 'markdown',
+          content:
+            `**默认入口：与 ${escapedBotName} 的私聊**\n\n` +
+            '从私聊选择项目，再去专属项目群持续工作。项目群里也可以发送 `/help` 查看同一份教程。',
+        },
+        { tag: 'hr' },
+        ...panels,
+        { tag: 'hr' },
+        tutorialActions(),
+      ],
+    },
+  };
+}
+
+function tutorialPanel(title: string, lines: string[], expanded = false): object {
+  return {
+    tag: 'collapsible_panel',
+    expanded,
+    header: {
+      title: { tag: 'markdown', content: `**${title}**` },
+      vertical_align: 'center',
+      icon: {
+        tag: 'standard_icon',
+        token: 'down-small-ccm_outlined',
+        size: '16px 16px',
+      },
+      icon_position: 'follow_text',
+      icon_expanded_angle: -180,
+    },
+    border: { color: expanded ? 'blue' : 'grey', corner_radius: '5px' },
+    vertical_spacing: '8px',
+    padding: '8px 8px 8px 8px',
+    elements: [{ tag: 'markdown', content: lines.join('\n'), text_size: 'notation' }],
+  };
+}
+
+function tutorialActions(): object {
+  const specs: Array<{ text: string; cmd: string; primary?: boolean }> = [
+    { text: '📊 状态', cmd: 'status', primary: true },
+    { text: '🔁 恢复会话', cmd: 'resume' },
+    { text: '📂 工作目录', cmd: 'ws.list' },
+    { text: '🆕 新会话', cmd: 'new' },
+  ];
+  return {
+    tag: 'column_set',
+    flex_mode: 'flow',
+    horizontal_spacing: 'small',
+    columns: specs.map((spec) => ({
+      tag: 'column',
+      width: 'auto',
+      elements: [
+        {
+          tag: 'button',
+          text: { tag: 'plain_text', content: spec.text },
+          ...(spec.primary ? { type: 'primary' } : {}),
+          behaviors: [{ type: 'callback', value: { cmd: spec.cmd } }],
+        },
+      ],
+    })),
+  };
 }
 
 function escapeMd(s: string): string {

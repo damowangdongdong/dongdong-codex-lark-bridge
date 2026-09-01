@@ -133,6 +133,7 @@ describe('Claude slash command visible behavior', () => {
 
   it('handles /status and /help with cards', async () => {
     const h = await createHarness();
+    Object.assign(h.channel, { botIdentity: { openId: 'ou-bot', name: '洞洞的codex' } });
     await writeLarkCliTarget(h, {
       defaultAs: 'auto',
       strictMode: 'off',
@@ -147,7 +148,10 @@ describe('Claude slash command visible behavior', () => {
     await expect(h.run('/help')).resolves.toBe(true);
     expect(lastContent(h.channel)).toHaveProperty('card');
     const help = JSON.stringify(lastContent(h.channel));
-    expect(help).toContain('Fake Agent');
+    expect(help).toContain('洞洞的codex');
+    expect(help).toContain('默认入口');
+    expect(help).toContain('四步快速开始');
+    expect(help).toContain('collapsible_panel');
     expect(help).toContain('lark-cli 身份策略');
     expect(help).not.toContain('/lark');
     expect(help).not.toContain('交给 Claude');
