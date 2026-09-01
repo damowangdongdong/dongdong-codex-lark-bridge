@@ -42,6 +42,8 @@ interface Harness {
     chats: Array<{ id: string; name: string }>;
     createCalls: number;
     getError?: Error;
+    getNeverResolves?: boolean;
+    onGet?: () => void;
   };
   run(content: string, options?: { withCatalogIdentity?: boolean; chatMode?: 'p2p' | 'group' | 'topic' }): Promise<boolean>;
   dispatchResumeArg(
@@ -67,6 +69,7 @@ const cleanups: Array<() => Promise<void>> = [];
 
 describe('agent-aware resume commands', () => {
   afterEach(async () => {
+    vi.useRealTimers();
     await Promise.all(cleanups.splice(0).map((cleanup) => cleanup()));
   });
 
@@ -644,6 +647,30 @@ describe('agent-aware resume commands', () => {
     expect(lastMarkdown(h.channel)).toContain('避免重复建群');
   });
 
+  it('已有项目群查询不返回时结束回调且不重复建群', async () => {
+    const h = await createHarness('codex');
+
+    await expect(h.run(`/cd ${h.tmp.workspace}`)).resolves.toBe(true);
+    await h.dispatchLaunch('freerouter', 'new');
+    await expect(h.run(`/cd ${h.tmp.workspace}`)).resolves.toBe(true);
+    h.projectChats.getNeverResolves = true;
+    let markLookupStarted: (() => void) | undefined;
+    const lookupStarted = new Promise<void>((resolve) => {
+      markLookupStarted = resolve;
+    });
+    h.projectChats.onGet = () => markLookupStarted?.();
+    vi.useFakeTimers();
+
+    const launch = h.dispatchLaunch('freerouter', 'new');
+    await lookupStarted;
+    await vi.advanceTimersByTimeAsync(10_000);
+    await launch;
+
+    expect(h.projectChats.createCalls).toBe(1);
+    expect(h.workspaces.codexLaunchPendingFor('chat-1')).toBe(true);
+    expect(lastMarkdown(h.channel)).toContain('避免重复建群');
+  });
+
   it('在同一项目群内用 /profile 重新选择 Codex profile', async () => {
     const h = await createHarness('codex');
     h.workspaces.setProjectChat(h.tmp.workspace, { chatId: 'chat-1', name: 'Project' });
@@ -932,7 +959,9 @@ async function createHarness(
   const projectChats: Harness['projectChats'] = { chats: [], createCalls: 0 };
   Object.assign(channel, {
     getChatInfo: async (chatId: string) => {
+      projectChats.onGet?.();
       if (projectChats.getError) throw projectChats.getError;
+      if (projectChats.getNeverResolves) await new Promise<never>(() => {});
       const chat = projectChats.chats.find((candidate) => candidate.id === chatId);
       if (!chat) throw Object.assign(new Error('chat not found'), { code: 'target_revoked' });
       return { chatId: chat.id, name: chat.name, chatType: 'group' };

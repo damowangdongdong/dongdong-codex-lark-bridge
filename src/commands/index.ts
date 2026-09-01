@@ -185,6 +185,7 @@ const RESUME_CANDIDATE_TTL_MS = 10 * 60 * 1000;
 const resumeCandidates = new Map<string, ResumeCandidate>();
 const AUDIT_SAFE_COMMAND_REPLY = '命令已处理。';
 const RESUME_APPLIED_REPLY = '已完成，请继续发送下一条消息。';
+const PROJECT_CHAT_LOOKUP_TIMEOUT_MS = 10_000;
 
 const handlers: Record<string, Handler> = {
   '/new': handleNew,
@@ -1416,7 +1417,7 @@ async function resolveProjectChat(
 
   if (mapped) {
     try {
-      const live = await ctx.channel.getChatInfo(mapped.chatId);
+      const live = await getProjectChatInfo(ctx.channel, mapped.chatId);
       const name = live.name || mapped.name;
       if (name !== mapped.name) {
         ctx.workspaces.setProjectChat(cwd, { chatId: mapped.chatId, name });
@@ -1453,6 +1454,23 @@ async function resolveProjectChat(
     const message = err instanceof Error ? err.message : String(err);
     await reply(ctx, `❌ 创建项目群失败：${message}\n\n确认 bot 已开启 \`im:chat\` 权限。`);
     return undefined;
+  }
+}
+
+async function getProjectChatInfo(channel: LarkChannel, chatId: string) {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      channel.getChatInfo(chatId),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error('project chat lookup timed out')),
+          PROJECT_CHAT_LOOKUP_TIMEOUT_MS,
+        );
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
   }
 }
 
