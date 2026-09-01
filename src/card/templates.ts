@@ -2,6 +2,10 @@ interface ButtonSpec {
   text: string;
   value: Record<string, unknown>;
   style?: 'primary' | 'danger' | 'default';
+  confirm?: {
+    title: string;
+    text: string;
+  };
 }
 
 function button(spec: ButtonSpec): object {
@@ -10,6 +14,14 @@ function button(spec: ButtonSpec): object {
     text: { tag: 'plain_text', content: spec.text },
     type: spec.style ?? 'default',
     value: spec.value,
+    ...(spec.confirm
+      ? {
+          confirm: {
+            title: { tag: 'plain_text', content: spec.confirm.title },
+            text: { tag: 'plain_text', content: spec.confirm.text },
+          },
+        }
+      : {}),
   };
 }
 
@@ -269,6 +281,27 @@ export function resumeCard(cwd: string, entries: ResumeEntry[]): object {
   });
 
   return shell('🔁 恢复历史会话', elements);
+}
+
+export function resumeTakeoverCard(threadId: string, nonce: string): object {
+  return shell('⚠️ Codex 会话正在使用中', [
+    divMd(
+      `thread \`${escapeCode(threadId.slice(0, 8))}…\` 正由另一个 Codex 进程持有。` +
+      '\n\n接管会终止该 Codex 进程，其中正在运行的其他会话也会中断。',
+    ),
+    actions([
+      {
+        text: '终止占用并接管',
+        value: { cmd: 'resume.takeover', arg: nonce },
+        style: 'danger',
+        confirm: {
+          title: '确认接管会话？',
+          text: '将终止当前持有该 thread 的 Codex 进程，然后在飞书中恢复会话。',
+        },
+      },
+      { text: '重新加载会话列表', value: { cmd: 'resume' } },
+    ]),
+  ]);
 }
 
 export function helpCard(agentName = 'Agent'): object {

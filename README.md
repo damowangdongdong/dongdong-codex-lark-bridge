@@ -23,6 +23,7 @@ For a product walkthrough, see the [Feishu document](https://larkcommunity.feish
 - At least one local agent installed and logged in:
   - Claude Code: `claude`, see https://docs.anthropic.com/en/docs/claude-code/quickstart
   - Codex CLI: `codex`, see https://developers.openai.com/codex/cli
+- `lsof` and `ps` when using the Codex session takeover action on Linux or macOS.
 - A Feishu / Lark **PersonalAgent** app. The first-run QR wizard can create and bind one for you.
 
 ## Install
@@ -145,7 +146,7 @@ If a profile was created with the wrong agent kind, stop or unregister any match
 | `/ws save <name>` | Save the current working directory as a named workspace |
 | `/ws use <name>` | Switch to a named workspace; Codex then opens the same launch picker |
 | `/ws remove <name>` | Delete a named workspace |
-| `/resume` | Resume compatible history for the same agent, working directory, and permission mode |
+| `/resume` | Resume history for the selected Codex profile; admins can confirm takeover when another Codex process owns the thread |
 | `/permissions [read-only\|workspace-write\|danger-full-access]` | Show or persist the Codex permission for this chat/topic (`/permission` also works) |
 | `/attach` | Print the exact command for attaching a local Codex TUI to this thread |
 | `/status` | Show profile, agent, working directory, session, lark-cli identity, and run state |
@@ -171,7 +172,7 @@ DMs do not require an @ mention. Groups and topic groups require `@bot` by defau
 
 ### Codex CLI workflow
 
-Codex uses one persistent `codex app-server` per selected Codex CLI profile. After `/cd` or `/ws use`, the bridge does not start a session automatically: the launch card asks whether to use the default Codex configuration (no `--profile`) or a discovered named profile such as `freerouter`, and whether to create or resume a thread. From a direct chat, continuing opens the path's dedicated project group; an existing live group for the same canonical path is reused. Use `/profile` in that group to switch profiles or choose new/resume again. `/resume` shows readable candidates and, after selection, paginated history from that thread.
+Codex uses one persistent `codex app-server` per selected Codex CLI profile. After `/cd` or `/ws use`, the bridge does not start a session automatically: the launch card asks whether to use the default Codex configuration (no `--profile`) or a discovered named profile such as `freerouter`, and whether to create or resume a thread. From a direct chat, continuing opens the path's dedicated project group; an existing live group for the same canonical path is reused. Use `/profile` in that group to switch profiles or choose new/resume again. `/resume` lists history for the selected profile's model provider and, after selection, shows paginated history from that thread. The bridge verifies availability with Codex itself instead of trusting its local catalog; when a real writer conflict exists, an administrator receives a second-confirmation action that terminates the holding Codex process and retries the resume.
 
 While a Codex turn is running, use **↵ Insert now** to steer the active turn (Enter semantics), or **⇥ Queue** to run the instruction after it completes (Tab semantics). `/attach` prints `codex --remote <endpoint> resume <thread-id>`; input entered in that attached terminal and its resulting progress/final answer are mirrored back to Feishu. Feishu-originated turns use the same app-server and thread.
 

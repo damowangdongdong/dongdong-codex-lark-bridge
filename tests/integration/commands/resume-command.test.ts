@@ -15,7 +15,10 @@ import { resolveWorkingDirectory } from '../../../src/policy/workspace.js';
 import { SessionCatalog, type SessionCatalogIdentity } from '../../../src/session/catalog.js';
 import { SessionStore } from '../../../src/session/store.js';
 import { WorkspaceStore } from '../../../src/workspace/store.js';
-import type { CodexThreadHistoryEntry } from '../../../src/session/codex-history.js';
+import type {
+  CodexThreadHistoryEntry,
+  ListCodexThreadHistoryOptions,
+} from '../../../src/session/codex-history.js';
 import type { SessionSummary } from '../../../src/session/history.js';
 import { FakeAgentAdapter } from '../../helpers/fake-agent.js';
 import { createFakeChannel, type FakeChannel } from '../../helpers/fake-channel.js';
@@ -32,6 +35,7 @@ interface Harness {
   identity: SessionCatalogIdentity;
   claudeHistory: SessionSummary[];
   codexHistory: CodexThreadHistoryEntry[];
+  codexHistoryRequests: ListCodexThreadHistoryOptions[];
   activeRuns: ActiveRuns;
   pending: PendingQueue;
   projectChats: {
@@ -41,6 +45,10 @@ interface Harness {
   };
   run(content: string, options?: { withCatalogIdentity?: boolean; chatMode?: 'p2p' | 'group' | 'topic' }): Promise<boolean>;
   dispatchResumeArg(
+    arg: string,
+    options?: { chatId?: string; chatMode?: 'p2p' | 'group' | 'topic' },
+  ): Promise<void>;
+  dispatchTakeoverArg(
     arg: string,
     options?: { chatId?: string; chatMode?: 'p2p' | 'group' | 'topic' },
   ): Promise<void>;
@@ -235,6 +243,15 @@ describe('agent-aware resume commands', () => {
       threadId: 'thread-beta-secret',
     });
     expect(h.sessions.getRaw('chat-1')).toBeUndefined();
+    expect(h.agent.appServerRequests.at(-2)).toMatchObject({
+      method: 'thread/resume',
+      params: {
+        threadId: 'thread-beta-secret',
+        cwd: h.identity.cwdRealpath,
+        approvalPolicy: 'never',
+        sandbox: 'danger-full-access',
+      },
+    });
     expect(h.agent.appServerRequests.at(-1)).toMatchObject({
       method: 'thread/read',
       params: { threadId: 'thread-beta-secret', includeTurns: true },
@@ -245,7 +262,23 @@ describe('agent-aware resume commands', () => {
     expect(historyCard).toContain('historic answer');
   });
 
-  it('hides Codex threads occupied by another identity while keeping free history', async () => {
+  it('filters Codex history by the selected profile model provider', async () => {
+    const h = await createHarness('codex');
+    const codexHome = join(h.tmp.root, 'codex-home');
+    await mkdir(codexHome, { recursive: true });
+    await writeFile(join(codexHome, 'freerouter.config.toml'), 'model_provider = "freerouter"\n');
+    h.controls.profileConfig.codex!.codexHome = codexHome;
+    h.workspaces.setCodexLaunch('chat-1', 'freerouter', 'resume');
+
+    await expect(h.run('/resume')).resolves.toBe(true);
+
+    expect(h.codexHistoryRequests.at(-1)).toMatchObject({
+      profile: 'freerouter',
+      modelProviders: ['freerouter'],
+    });
+  });
+
+  it('does not hide Codex history based on stale catalog active entries', async () => {
     const h = await createHarness('codex');
     h.codexHistory.push(
       codexThread('thread-busy', 'busy prompt', 1_700_000_100_000),
@@ -262,9 +295,9 @@ describe('agent-aware resume commands', () => {
     await expect(h.run('/resume')).resolves.toBe(true);
 
     const rendered = lastContentString(h.channel);
-    expect(rendered).not.toContain('busy prompt');
+    expect(rendered).toContain('busy prompt');
     expect(rendered).toContain('free prompt');
-    expect(resumeArgsFromCard(lastContent(h.channel))).toHaveLength(1);
+    expect(resumeArgsFromCard(lastContent(h.channel))).toHaveLength(2);
   });
 
   it('keeps the current identity own Codex thread available for resume', async () => {
@@ -278,7 +311,7 @@ describe('agent-aware resume commands', () => {
     expect(resumeArgsFromCard(lastContent(h.channel))).toHaveLength(1);
   });
 
-  it('rejects a Codex resume candidate that another identity occupies after listing', async () => {
+  it('uses thread/resume instead of a catalog entry to decide whether a Codex thread is available', async () => {
     const h = await createHarness('codex');
     h.codexHistory.push(codexThread('thread-raced', 'race prompt', 1_700_000_100_000));
     await expect(h.run('/resume')).resolves.toBe(true);
@@ -293,11 +326,15 @@ describe('agent-aware resume commands', () => {
 
     await expect(h.run(`/resume use ${nonce}`)).resolves.toBe(true);
 
-    expect(h.catalog.activeFor(h.identity)).toBeUndefined();
-    expect(lastMarkdown(h.channel)).toContain('正由其他会话或 profile 使用');
+    expect(h.agent.appServerRequests[0]).toMatchObject({
+      method: 'thread/resume',
+      params: { threadId: 'thread-raced' },
+    });
+    expect(h.catalog.activeFor(h.identity)).toMatchObject({ threadId: 'thread-raced' });
+    expect(lastMarkdown(h.channel)).toContain('已完成');
   });
 
-  it('does not offer a catalog fallback thread occupied by another identity', async () => {
+  it('offers the current catalog fallback even when another identity has a stale active entry', async () => {
     const h = await createHarness('codex');
     h.catalog.upsertActive({ ...h.identity, threadId: 'thread-shared', now: 1000 });
     h.catalog.upsertActive({
@@ -310,8 +347,89 @@ describe('agent-aware resume commands', () => {
 
     await expect(h.run('/resume')).resolves.toBe(true);
 
-    expect(lastContentString(h.channel)).toContain('此 cwd 下没有历史会话');
-    expect(lastContentString(h.channel)).not.toContain('/resume use');
+    expect(lastMarkdown(h.channel)).toContain('当前 Codex thread 可恢复');
+    expect(lastMarkdown(h.channel)).toMatch(/\/resume use [a-f0-9-]+/);
+  });
+
+  it('does not change the catalog when thread/resume fails', async () => {
+    const h = await createHarness('codex');
+    h.codexHistory.push(codexThread('thread-broken', 'broken prompt', 1_700_000_100_000));
+    h.agent.setAppServerError('thread/resume', new Error('resume failed'));
+    await expect(h.run('/resume')).resolves.toBe(true);
+    const [nonce] = resumeArgsFromCard(lastContent(h.channel));
+
+    await expect(h.run(`/resume use ${nonce}`)).resolves.toBe(true);
+
+    expect(h.catalog.activeFor(h.identity)).toBeUndefined();
+    expect(lastMarkdown(h.channel)).toContain('恢复 Codex thread 失败：resume failed');
+  });
+
+  it('offers a confirmed takeover when Codex reports an active writer', async () => {
+    const h = await createHarness('codex');
+    h.codexHistory.push(codexThread('thread-busy', 'busy prompt', 1_700_000_100_000));
+    h.agent.setAppServerError('thread/resume', new Error('thread already has an active writer'));
+    await expect(h.run('/resume')).resolves.toBe(true);
+    const [nonce] = resumeArgsFromCard(lastContent(h.channel));
+
+    await expect(h.run(`/resume use ${nonce}`)).resolves.toBe(true);
+
+    const card = lastContent(h.channel);
+    expect(JSON.stringify(card)).toContain('终止占用并接管');
+    expect(JSON.stringify(card)).toContain('confirm');
+    expect(takeoverArgsFromCard(card)).toHaveLength(1);
+    expect(h.catalog.activeFor(h.identity)).toBeUndefined();
+  });
+
+  it('takes over the writer, retries thread/resume, and only then updates the catalog', async () => {
+    const h = await createHarness('codex');
+    h.codexHistory.push(codexThread('thread-busy', 'busy prompt', 1_700_000_100_000));
+    h.agent.setAppServerError('thread/resume', new Error('thread already has an active writer'));
+    await expect(h.run('/resume')).resolves.toBe(true);
+    const [resumeNonce] = resumeArgsFromCard(lastContent(h.channel));
+    await expect(h.run(`/resume use ${resumeNonce}`)).resolves.toBe(true);
+    const [takeoverNonce] = takeoverArgsFromCard(lastContent(h.channel));
+
+    await h.dispatchTakeoverArg(takeoverNonce!);
+
+    expect(h.agent.takeoverThreadWriterCalls).toEqual(['thread-busy']);
+    expect(h.agent.appServerRequests.filter((request) => request.method === 'thread/resume')).toHaveLength(2);
+    expect(h.catalog.activeFor(h.identity)).toMatchObject({ threadId: 'thread-busy' });
+    expect(lastMarkdown(h.channel)).toContain('已终止占用进程并完成接管');
+  });
+
+  it('keeps the catalog unchanged when the writer is still active after takeover', async () => {
+    const h = await createHarness('codex');
+    h.codexHistory.push(codexThread('thread-busy', 'busy prompt', 1_700_000_100_000));
+    h.agent.setAppServerError('thread/resume', new Error('thread already has an active writer'));
+    h.agent.setAppServerError('thread/resume', new Error('thread already has an active writer'));
+    await expect(h.run('/resume')).resolves.toBe(true);
+    const [resumeNonce] = resumeArgsFromCard(lastContent(h.channel));
+    await expect(h.run(`/resume use ${resumeNonce}`)).resolves.toBe(true);
+    const [takeoverNonce] = takeoverArgsFromCard(lastContent(h.channel));
+
+    await h.dispatchTakeoverArg(takeoverNonce!);
+
+    expect(h.catalog.activeFor(h.identity)).toBeUndefined();
+    expect(lastMarkdown(h.channel)).toContain('接管后该 Codex thread 仍被占用');
+  });
+
+  it('allows only admins to take over a Codex writer', async () => {
+    const h = await createHarness('codex');
+    h.codexHistory.push(codexThread('thread-busy', 'busy prompt', 1_700_000_100_000));
+    h.agent.setAppServerError('thread/resume', new Error('thread already has an active writer'));
+    await expect(h.run('/resume')).resolves.toBe(true);
+    const [resumeNonce] = resumeArgsFromCard(lastContent(h.channel));
+    await expect(h.run(`/resume use ${resumeNonce}`)).resolves.toBe(true);
+    const [takeoverNonce] = takeoverArgsFromCard(lastContent(h.channel));
+    h.controls.botOwnerId = 'ou-owner';
+    h.controls.profileConfig.access.admins = [];
+    h.controls.profileConfig.access.allowedUsers = ['ou-user'];
+
+    await h.dispatchTakeoverArg(takeoverNonce!);
+
+    expect(h.agent.takeoverThreadWriterCalls).toHaveLength(0);
+    expect(h.catalog.activeFor(h.identity)).toBeUndefined();
+    expect(lastMarkdown(h.channel)).toContain('仅管理员可用');
   });
 
   it('resumes a Codex history selection from the card button callback', async () => {
@@ -335,7 +453,7 @@ describe('agent-aware resume commands', () => {
     h.codexHistory.push(codexThread('thread-offline', 'offline history', 1_700_000_100_000));
     await expect(h.run('/resume')).resolves.toBe(true);
     const [nonce] = resumeArgsFromCard(lastContent(h.channel));
-    vi.spyOn(h.agent, 'appServerRequest').mockRejectedValueOnce(new Error('app-server offline'));
+    h.agent.setAppServerError('thread/read', new Error('app-server offline'));
 
     await expect(h.run(`/resume use ${nonce}`)).resolves.toBe(true);
 
@@ -782,6 +900,7 @@ async function createHarness(
   const catalog = new SessionCatalog(join(tmp.profile, 'session-catalog.json'));
   const claudeHistory: SessionSummary[] = [];
   const codexHistory: CodexThreadHistoryEntry[] = [];
+  const codexHistoryRequests: ListCodexThreadHistoryOptions[] = [];
   const activeRuns = new ActiveRuns();
   const pending = new PendingQueue(60_000, () => {});
   const agent = new FakeAgentAdapter({ id: agentKind, displayName: agentKind === 'codex' ? 'Codex CLI' : 'Claude Code' });
@@ -827,7 +946,10 @@ async function createHarness(
       activeRuns,
       controls,
       claudeHistoryProvider: async () => claudeHistory,
-      codexHistoryProvider: async () => codexHistory,
+      codexHistoryProvider: async (options) => {
+        codexHistoryRequests.push(options);
+        return codexHistory;
+      },
     });
 
   const dispatchResumeArg = (
@@ -848,6 +970,31 @@ async function createHarness(
       pending,
       chatModeCache,
       codexHistoryProvider: async () => codexHistory,
+      claudeHistoryProvider: async () => claudeHistory,
+    });
+  };
+
+  const dispatchTakeoverArg = (
+    arg: string,
+    dispatchOptions: { chatId?: string; chatMode?: 'p2p' | 'group' | 'topic' } = {},
+  ): Promise<void> => {
+    const chatId = dispatchOptions.chatId ?? 'chat-1';
+    cardModes.set(chatId, dispatchOptions.chatMode ?? 'p2p');
+    return handleCardAction({
+      channel: channel as unknown as Parameters<typeof handleCardAction>[0]['channel'],
+      evt: cardEvent({ cmd: 'resume.takeover', arg }, undefined, chatId),
+      sessions,
+      sessionCatalog: catalog,
+      workspaces,
+      activeRuns,
+      agent,
+      controls,
+      pending,
+      chatModeCache,
+      codexHistoryProvider: async (options) => {
+        codexHistoryRequests.push(options);
+        return codexHistory;
+      },
       claudeHistoryProvider: async () => claudeHistory,
     });
   };
@@ -874,7 +1021,10 @@ async function createHarness(
       controls,
       pending,
       chatModeCache,
-      codexHistoryProvider: async () => codexHistory,
+      codexHistoryProvider: async (options) => {
+        codexHistoryRequests.push(options);
+        return codexHistory;
+      },
       claudeHistoryProvider: async () => claudeHistory,
     });
   };
@@ -896,11 +1046,13 @@ async function createHarness(
     identity,
     claudeHistory,
     codexHistory,
+    codexHistoryRequests,
     activeRuns,
     pending,
     projectChats,
     run,
     dispatchResumeArg,
+    dispatchTakeoverArg,
     dispatchLaunch,
   };
 }
@@ -1022,18 +1174,31 @@ function resumeNonce(markdown: string): string {
 
 function resumeArgsFromCard(card: unknown): string[] {
   const out: string[] = [];
-  const visit = (value: unknown): void => {
-    if (!value || typeof value !== 'object') return;
-    const record = value as Record<string, unknown>;
-    const action = record.value as Record<string, unknown> | undefined;
+  walkCard(card, (action) => {
     if (action?.cmd === 'resume.use' && typeof action.arg === 'string') out.push(action.arg);
-    for (const child of Object.values(record)) {
-      if (Array.isArray(child)) child.forEach(visit);
-      else visit(child);
-    }
-  };
-  visit(card);
+  });
   return out;
+}
+
+function takeoverArgsFromCard(card: unknown): string[] {
+  const out: string[] = [];
+  walkCard(card, (action) => {
+    if (action?.cmd === 'resume.takeover' && typeof action.arg === 'string') out.push(action.arg);
+  });
+  return out;
+}
+
+function walkCard(
+  value: unknown,
+  visitAction: (action: Record<string, unknown> | undefined) => void,
+): void {
+  if (!value || typeof value !== 'object') return;
+  const record = value as Record<string, unknown>;
+  visitAction(record.value as Record<string, unknown> | undefined);
+  for (const child of Object.values(record)) {
+    if (Array.isArray(child)) child.forEach((entry) => walkCard(entry, visitAction));
+    else walkCard(child, visitAction);
+  }
 }
 
 function codexThread(

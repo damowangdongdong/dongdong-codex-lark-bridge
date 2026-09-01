@@ -4,7 +4,7 @@ import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute } from 'node:path';
 import type { LarkChannel, NormalizedMessage } from '@larksuite/channel';
 import { claudeCapability, codexCapability } from '../agent/capability';
-import { discoverCodexProfiles } from '../config/codex-profiles';
+import { discoverCodexProfiles, loadCodexProfileConfig } from '../config/codex-profiles';
 import { DEFAULT_MODEL, normalizeModelSelection, resolveModelArg, supportedModels } from '../agent/models';
 import type { AgentAdapter } from '../agent/types';
 import type { ActiveRuns } from '../bot/active-runs';
@@ -29,6 +29,7 @@ import {
   helpCard,
   permissionsCard,
   resumeCard,
+  resumeTakeoverCard,
   statusCard,
   workspaceLaunchCard,
   workspacesCard,
@@ -176,6 +177,7 @@ interface ResumeCandidate {
   policyFingerprint: string;
   sessionId?: string;
   threadId?: string;
+  kind: 'resume' | 'takeover';
   expiresAt: number;
 }
 
@@ -1082,6 +1084,10 @@ function stringValue(value: unknown): string | undefined {
   return typeof value === 'string' ? value : undefined;
 }
 
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
 function parseCodexSandbox(value: string): CodexSandboxMode | undefined {
   switch (value.toLowerCase()) {
     case 'read':
@@ -1595,6 +1601,13 @@ async function handleResume(args: string, ctx: CommandContext): Promise<void> {
   if (sub === 'use' && rest) {
     return applyResume(rest, ctx);
   }
+  if (sub === 'takeover') {
+    if (!rest) {
+      await reply(ctx, '请从“终止占用并接管”确认卡执行接管。');
+      return;
+    }
+    return applyResumeTakeover(rest, ctx);
+  }
 
   // Default: list recent sessions
   const n = Number.parseInt(sub, 10);
@@ -1621,13 +1634,7 @@ async function handleResume(args: string, ctx: CommandContext): Promise<void> {
         ? ctx.sessionCatalog.activeFor(identity)
         : undefined;
     const history = identity
-      ? (await listCodexResumeHistory(ctx, cwd, limit)).filter(
-          (thread) => !isCodexThreadOccupiedByOtherIdentity(
-            ctx.sessionCatalog,
-            identity,
-            thread.threadId,
-          ),
-        )
+      ? await listCodexResumeHistory(ctx, cwd, limit)
       : [];
     if (history.length > 0 && identity) {
       const entries = history.map((thread) => {
@@ -1644,11 +1651,7 @@ async function handleResume(args: string, ctx: CommandContext): Promise<void> {
       await ctx.channel.send(ctx.msg.chatId, { card }, commandReplyOptions(ctx));
       return;
     }
-    if (
-      entry?.threadId
-      && identity
-      && !isCodexThreadOccupiedByOtherIdentity(ctx.sessionCatalog, identity, entry.threadId)
-    ) {
+    if (entry?.threadId && identity) {
       const nonce = issueResumeCandidate(identity, { threadId: entry.threadId });
       await reply(
         ctx,
@@ -1681,30 +1684,12 @@ async function handleResume(args: string, ctx: CommandContext): Promise<void> {
 async function applyResume(sessionId: string, ctx: CommandContext): Promise<void> {
   if (ctx.sessionCatalog && ctx.sessionCatalogIdentity) {
     const entry = ctx.sessionCatalog.activeFor(ctx.sessionCatalogIdentity);
-    const resolved = consumeResumeCandidate(sessionId, ctx.sessionCatalogIdentity);
+    const resolved = consumeResumeCandidate(sessionId, ctx.sessionCatalogIdentity, 'resume');
     if (resolved) {
       if (ctx.sessionCatalogIdentity.agentId === 'codex') {
         const threadId = resolved.threadId!;
-        if (isCodexThreadOccupiedByOtherIdentity(
-          ctx.sessionCatalog,
-          ctx.sessionCatalogIdentity,
-          threadId,
-        )) {
-          await reply(ctx, '该 Codex thread 正由其他会话或 profile 使用，请重新选择。');
-          return;
-        }
-        ctx.activeRuns.interrupt(ctx.scope);
-        ctx.sessionCatalog.upsertActive({
-          scopeId: ctx.sessionCatalogIdentity.scopeId,
-          agentId: 'codex',
-          cwdRealpath: ctx.sessionCatalogIdentity.cwdRealpath,
-          policyFingerprint: ctx.sessionCatalogIdentity.policyFingerprint,
-          threadId,
-        });
-        ctx.workspaces.confirmCodexResume(ctx.scope);
-        bindCodexThread(ctx, threadId, ctx.sessionCatalogIdentity.cwdRealpath);
-        await reply(ctx, RESUME_APPLIED_REPLY);
-        await sendCodexResumeHistory(ctx, threadId, ctx.sessionCatalogIdentity.cwdRealpath);
+        if (!await resumeCodexThreadOrOfferTakeover(ctx, ctx.sessionCatalogIdentity, threadId)) return;
+        await activateCodexResume(ctx, ctx.sessionCatalogIdentity, threadId);
         return;
       } else {
         ctx.activeRuns.interrupt(ctx.scope);
@@ -1752,22 +1737,123 @@ async function applyResume(sessionId: string, ctx: CommandContext): Promise<void
   await reply(ctx, RESUME_APPLIED_REPLY);
 }
 
-function isCodexThreadOccupiedByOtherIdentity(
-  catalog: SessionCatalog | undefined,
+async function applyResumeTakeover(nonce: string, ctx: CommandContext): Promise<void> {
+  if (!canRunAdminCommand(ctx.controls.profileConfig, ctx.controls, ctx.msg.senderId).ok) {
+    await reply(ctx, '❌ 此命令仅管理员可用。');
+    return;
+  }
+  const identity = ctx.sessionCatalogIdentity;
+  if (!identity || identity.agentId !== 'codex') {
+    await reply(ctx, '当前上下文不可接管这个 Codex 会话，请重新使用 `/resume`。');
+    return;
+  }
+  const candidate = consumeResumeCandidate(nonce, identity, 'takeover');
+  if (!candidate?.threadId) {
+    await reply(ctx, '接管确认已过期或不属于当前上下文，请重新使用 `/resume`。');
+    return;
+  }
+  if (!ctx.agent.takeoverThreadWriter) {
+    await reply(ctx, '当前 Codex adapter 不支持终止占用进程。');
+    return;
+  }
+
+  try {
+    await ctx.agent.takeoverThreadWriter(candidate.threadId);
+    await resumeCodexThread(ctx, candidate.threadId, identity.cwdRealpath);
+  } catch (err) {
+    const message = errorMessage(err);
+    await reply(
+      ctx,
+      isActiveWriterError(err)
+        ? '接管后该 Codex thread 仍被占用，请重新使用 `/resume` 后再试。'
+        : `接管 Codex thread 失败：${message}`,
+    );
+    return;
+  }
+  await activateCodexResume(ctx, identity, candidate.threadId, '已终止占用进程并完成接管，请继续发送下一条消息。');
+}
+
+async function resumeCodexThreadOrOfferTakeover(
+  ctx: CommandContext,
   identity: SessionCatalogIdentity,
   threadId: string,
-): boolean {
-  if (!catalog) return false;
-  return catalog.entries().some((entry) =>
-    entry.status === 'active'
-    && entry.agentId === 'codex'
-    && entry.threadId === threadId
-    && (
-      entry.scopeId !== identity.scopeId
-      || entry.cwdRealpath !== identity.cwdRealpath
-      || entry.policyFingerprint !== identity.policyFingerprint
-    ),
+): Promise<boolean> {
+  try {
+    await resumeCodexThread(ctx, threadId, identity.cwdRealpath);
+    return true;
+  } catch (err) {
+    if (!isActiveWriterError(err)) {
+      await reply(ctx, `恢复 Codex thread 失败：${errorMessage(err)}`);
+      return false;
+    }
+    const nonce = issueResumeCandidate(identity, { threadId }, 'takeover');
+    await ctx.channel.send(
+      ctx.msg.chatId,
+      { card: resumeTakeoverCard(threadId, nonce) },
+      commandReplyOptions(ctx),
+    );
+    return false;
+  }
+}
+
+async function resumeCodexThread(
+  ctx: CommandContext,
+  threadId: string,
+  cwd: string,
+): Promise<void> {
+  await codexRpc(ctx, 'thread/resume', await codexResumeParams(ctx, threadId, cwd));
+}
+
+async function codexResumeParams(
+  ctx: CommandContext,
+  threadId: string,
+  cwd: string,
+): Promise<Record<string, unknown>> {
+  const codex = ctx.controls.profileConfig.codex;
+  const profile = ctx.workspaces.codexProfileFor(ctx.scope, codex?.profile);
+  const model = ctx.workspaces.codexModelFor(
+    ctx.scope,
+    resolveModelArg('codex', ctx.controls.profileConfig.preferences.model),
   );
+  const personality = ctx.workspaces.codexPersonalityFor(ctx.scope);
+  const config = profile && codex
+    ? await loadCodexProfileConfig({
+        cwd,
+        profile,
+        profileStateDir: commandProfilePaths(ctx).profileDir,
+        ...(codex.codexHome ? { codexHome: codex.codexHome } : {}),
+        ...(codex.inheritCodexHome !== undefined
+          ? { inheritCodexHome: codex.inheritCodexHome }
+          : {}),
+      })
+    : undefined;
+  return {
+    threadId,
+    cwd,
+    approvalPolicy: 'never',
+    sandbox: effectiveCodexSandbox(ctx),
+    ...(model ? { model } : {}),
+    ...(personality ? { personality } : {}),
+    ...(config ? { config } : {}),
+  };
+}
+
+async function activateCodexResume(
+  ctx: CommandContext,
+  identity: SessionCatalogIdentity,
+  threadId: string,
+  successMessage = RESUME_APPLIED_REPLY,
+): Promise<void> {
+  ctx.activeRuns.interrupt(ctx.scope);
+  ctx.sessionCatalog?.upsertActive({ ...identity, threadId });
+  ctx.workspaces.confirmCodexResume(ctx.scope);
+  bindCodexThread(ctx, threadId, identity.cwdRealpath);
+  await reply(ctx, successMessage);
+  await sendCodexResumeHistory(ctx, threadId, identity.cwdRealpath);
+}
+
+function isActiveWriterError(err: unknown): boolean {
+  return /already has an active writer/i.test(errorMessage(err));
 }
 
 async function sendCodexResumeHistory(
@@ -1806,6 +1892,7 @@ async function sendCodexResumeHistory(
 function issueResumeCandidate(
   identity: SessionCatalogIdentity,
   target: { sessionId: string } | { threadId: string },
+  kind: ResumeCandidate['kind'] = 'resume',
 ): string {
   pruneResumeCandidates();
   let nonce = randomUUID().slice(0, 12);
@@ -1816,6 +1903,7 @@ function issueResumeCandidate(
     cwdRealpath: identity.cwdRealpath,
     policyFingerprint: identity.policyFingerprint,
     ...target,
+    kind,
     expiresAt: Date.now() + RESUME_CANDIDATE_TTL_MS,
   });
   return nonce;
@@ -1824,6 +1912,7 @@ function issueResumeCandidate(
 function consumeResumeCandidate(
   nonce: string,
   identity: SessionCatalogIdentity,
+  kind: ResumeCandidate['kind'] = 'resume',
 ): ResumeCandidate | undefined {
   pruneResumeCandidates();
   const candidate = resumeCandidates.get(nonce);
@@ -1834,6 +1923,7 @@ function consumeResumeCandidate(
     candidate.agentId !== identity.agentId ||
     candidate.cwdRealpath !== identity.cwdRealpath ||
     candidate.policyFingerprint !== identity.policyFingerprint ||
+    candidate.kind !== kind ||
     (identity.agentId === 'claude' && !candidate.sessionId) ||
     (identity.agentId === 'codex' && !candidate.threadId)
   ) {
@@ -1868,6 +1958,19 @@ async function listCodexResumeHistory(
 
   const provider = ctx.codexHistoryProvider ?? listCodexThreadHistory;
   try {
+    const profile = ctx.workspaces.codexProfileFor(ctx.scope, codex.profile);
+    const profileConfig = profile
+      ? await loadCodexProfileConfig({
+          cwd,
+          profile,
+          profileStateDir: commandProfilePaths(ctx).profileDir,
+          ...(codex.codexHome ? { codexHome: codex.codexHome } : {}),
+          ...(codex.inheritCodexHome !== undefined
+            ? { inheritCodexHome: codex.inheritCodexHome }
+            : {}),
+        })
+      : undefined;
+    const modelProvider = stringValue(profileConfig?.model_provider);
     return await provider({
       binary,
       cwd,
@@ -1877,9 +1980,8 @@ async function listCodexResumeHistory(
       ...(codex.inheritCodexHome !== undefined
         ? { inheritCodexHome: codex.inheritCodexHome }
         : {}),
-      ...(ctx.workspaces.codexProfileFor(ctx.scope, codex.profile)
-        ? { profile: ctx.workspaces.codexProfileFor(ctx.scope, codex.profile) }
-        : {}),
+      ...(profile ? { profile } : {}),
+      ...(modelProvider ? { modelProviders: [modelProvider] } : {}),
     });
   } catch (err) {
     log.warn('session', 'codex-history-failed', {

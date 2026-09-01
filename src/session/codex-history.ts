@@ -38,6 +38,7 @@ export interface ListCodexThreadHistoryOptions {
   profile?: string;
   timeoutMs?: number;
   sourceKinds?: readonly CodexThreadSourceKind[];
+  modelProviders?: readonly string[];
   useStateDbOnly?: boolean;
 }
 
@@ -219,6 +220,7 @@ function listRequest(options: ListCodexThreadHistoryOptions) {
       cwd: options.cwd,
       useStateDbOnly: options.useStateDbOnly ?? true,
       sourceKinds: [...(options.sourceKinds ?? DEFAULT_SOURCE_KINDS)],
+      ...(options.modelProviders ? { modelProviders: [...options.modelProviders] } : {}),
     },
   };
 }

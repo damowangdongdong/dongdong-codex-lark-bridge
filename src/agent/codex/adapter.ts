@@ -17,6 +17,11 @@ import type {
 } from '../types';
 import { CodexAppServerClient, type RpcNotification } from './app-server-client';
 import { CodexAppServerEventTranslator } from './app-server-events';
+import {
+  findThreadWriterPids,
+  isCodexProcess,
+  terminateProcess,
+} from './thread-writer';
 
 export interface CodexAdapterOptions {
   binary: string;
@@ -129,6 +134,38 @@ export class CodexAdapter implements AgentAdapter {
     await client.start();
     if (!client.endpoint) throw new Error('Codex app-server returned no endpoint');
     return client.endpoint;
+  }
+
+  async takeoverThreadWriter(threadId: string): Promise<{ terminatedPids: number[] }> {
+    const pids = await findThreadWriterPids(this.codexHome(), threadId);
+    if (pids.includes(process.pid)) {
+      throw new Error('thread writer 由当前 bridge 进程持有，无法安全接管');
+    }
+
+    const owned = new Map<number, { key: string; client: CodexAppServerClient }>();
+    for (const [key, client] of this.clients.entries()) {
+      if (client.processId) owned.set(client.processId, { key, client });
+    }
+
+    const externalPids = pids.filter((pid) => !owned.has(pid));
+    for (const pid of externalPids) {
+      if (!await isCodexProcess(pid, this.options.binary)) {
+        throw new Error(`thread writer 进程 ${pid} 不是 Codex，已拒绝终止`);
+      }
+    }
+
+    const terminatedPids: number[] = [];
+    for (const pid of pids) {
+      const ownedClient = owned.get(pid);
+      if (ownedClient) {
+        await ownedClient.client.close();
+        this.clients.delete(ownedClient.key);
+      } else {
+        await terminateProcess(pid);
+      }
+      terminatedPids.push(pid);
+    }
+    return { terminatedPids };
   }
 
   bindRemoteThread(binding: AgentRemoteThreadBinding): void {

@@ -65,6 +65,10 @@ export class CodexAppServerClient {
     return this.endpointValue;
   }
 
+  get processId(): number | undefined {
+    return this.child?.pid;
+  }
+
   async start(): Promise<void> {
     if (this.socket?.readyState === WebSocket.OPEN) return;
     if (this.starting) return this.starting;

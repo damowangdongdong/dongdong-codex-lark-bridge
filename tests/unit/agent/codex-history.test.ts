@@ -42,6 +42,7 @@ describe('Codex thread history provider', () => {
       limit: 2,
       profileStateDir: fake.dir,
       profile: 'freerouter',
+      modelProviders: ['freerouter'],
       timeoutMs: 5000,
     });
 
@@ -87,6 +88,7 @@ describe('Codex thread history provider', () => {
           sortDirection: 'desc',
           useStateDbOnly: true,
           sourceKinds: ['cli', 'vscode', 'exec', 'appServer', 'unknown'],
+          modelProviders: ['freerouter'],
         },
       },
     ]);

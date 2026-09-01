@@ -73,8 +73,11 @@ export class FakeAgentAdapter implements AgentAdapter {
   readonly runOptions: AgentRunOptions[] = [];
   botIdentity: AgentBotIdentity | undefined;
   readonly appServerRequests: Array<{ profile?: string; method: string; params?: unknown }> = [];
+  readonly takeoverThreadWriterCalls: string[] = [];
   appServerEndpointValue = 'unix:///tmp/fake-codex.sock';
   private readonly appServerResponses = new Map<string, unknown>();
+  private readonly appServerErrors = new Map<string, Error[]>();
+  takeoverThreadWriterError: Error | undefined;
   #available: boolean;
   #eventRuns: AgentEvent[][];
   #waitForExitResults: boolean[];
@@ -129,6 +132,9 @@ export class FakeAgentAdapter implements AgentAdapter {
 
   async appServerRequest(profile: string | undefined, method: string, params?: unknown): Promise<unknown> {
     this.appServerRequests.push({ ...(profile ? { profile } : {}), method, ...(params === undefined ? {} : { params }) });
+    const errors = this.appServerErrors.get(method);
+    const error = errors?.shift();
+    if (error) throw error;
     return this.appServerResponses.get(method) ?? {};
   }
 
@@ -138,6 +144,18 @@ export class FakeAgentAdapter implements AgentAdapter {
 
   setAppServerResponse(method: string, response: unknown): void {
     this.appServerResponses.set(method, response);
+  }
+
+  setAppServerError(method: string, error: Error): void {
+    const errors = this.appServerErrors.get(method) ?? [];
+    errors.push(error);
+    this.appServerErrors.set(method, errors);
+  }
+
+  async takeoverThreadWriter(threadId: string): Promise<{ terminatedPids: number[] }> {
+    this.takeoverThreadWriterCalls.push(threadId);
+    if (this.takeoverThreadWriterError) throw this.takeoverThreadWriterError;
+    return { terminatedPids: [1234] };
   }
 }
 
