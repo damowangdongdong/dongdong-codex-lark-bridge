@@ -207,6 +207,8 @@ const handlers: Record<string, Handler> = {
   '/account': handleAccount,
   '/config': handleConfig,
   '/stop': handleStop,
+  '/interupt': handleInterrupt,
+  '/interrupt': handleInterrupt,
   '/timeout': handleTimeout,
   '/ps': handlePs,
   '/exit': handleExit,
@@ -262,6 +264,13 @@ export async function tryHandleCommand(ctx: CommandContext): Promise<boolean> {
   const cmd = parts[0] ?? '';
   const args = parts.slice(1).join(' ');
   const h = handlers[cmd];
+  // `/queue` is bridge-native for Codex, but remains ordinary agent input for
+  // Claude where no queue contract exists. Keep it in the shared dispatcher
+  // so text commands and card actions use the same implementation.
+  if (cmd === '/queue' && ctx.agent.id === 'codex') {
+    await handleQueue(args, ctx);
+    return true;
+  }
   if (!h && ctx.agent.id !== 'codex') return false;
   if (
     isAdminCommand(cmd) &&
@@ -2638,7 +2647,8 @@ function formatOwnerState(ctx: CommandContext): string {
 
 async function handleStop(args: string, ctx: CommandContext): Promise<void> {
   const targetScope = args.trim();
-  const active = ctx.activeRuns.get(ctx.scope);
+  const scope = targetScope || ctx.scope;
+  const active = ctx.activeRuns.get(scope);
   if (
     ctx.agent.id === 'codex'
     && (
@@ -2647,6 +2657,7 @@ async function handleStop(args: string, ctx: CommandContext): Promise<void> {
       || (!targetScope && !active)
     )
   ) {
+    ctx.pending?.cancel(scope);
     await handleCodexBackgroundTerminalsStop(ctx);
     return;
   }
@@ -2654,12 +2665,13 @@ async function handleStop(args: string, ctx: CommandContext): Promise<void> {
     await reply(ctx, '❌ 指定 scope 停止任务仅管理员可用。');
     return;
   }
-  const scope = targetScope || ctx.scope;
+  const dropped = ctx.pending?.cancel(scope).length ?? 0;
   const ok = ctx.activeRuns.interrupt(scope);
   log.info('command', 'stop', {
     scope,
     targeted: Boolean(targetScope),
     interrupted: ok,
+    droppedPending: dropped,
   });
   if (targetScope) {
     await reply(
@@ -2671,6 +2683,47 @@ async function handleStop(args: string, ctx: CommandContext): Promise<void> {
   }
   // No reply for the current IM scope: if there was a run, its in-flight
   // render loop will mark the card as interrupted and re-render.
+}
+
+async function handleInterrupt(args: string, ctx: CommandContext): Promise<void> {
+  if (args.trim()) {
+    await reply(ctx, '用法：`/interupt`（`/interrupt` 同义）');
+    return;
+  }
+  const queued = ctx.pending?.size(ctx.scope) ?? 0;
+  const interrupted = ctx.activeRuns.interrupt(ctx.scope);
+  if (interrupted) {
+    await reply(
+      ctx,
+      queued > 0
+        ? `已打断当前 turn，${queued} 条排队消息会直接进入下一轮上下文。`
+        : '已打断当前 turn。',
+    );
+    log.info('command', 'interrupt', { scope: ctx.scope, interrupted: true, queued });
+    return;
+  }
+  if (queued > 0) {
+    const flushed = ctx.pending?.flushNow(ctx.scope) ?? 0;
+    await reply(ctx, flushed > 0 ? `已立即执行 ${flushed} 条排队消息。` : '排队消息正在等待当前任务结束。');
+    log.info('command', 'interrupt', { scope: ctx.scope, interrupted: false, queued, flushed });
+    return;
+  }
+  await reply(ctx, '当前没有正在执行的任务或排队消息。');
+  log.info('command', 'interrupt', { scope: ctx.scope, interrupted: false, queued: 0 });
+}
+
+async function handleQueue(args: string, ctx: CommandContext): Promise<void> {
+  const content = args.trim();
+  if (!content) {
+    await reply(ctx, '用法：`/queue <下一条指令>`');
+    return;
+  }
+  if (!ctx.pending) {
+    await reply(ctx, '当前 queue 不可用，请直接发送消息。');
+    return;
+  }
+  const size = ctx.pending.push(ctx.scope, { ...ctx.msg, content });
+  await reply(ctx, `⇥ 已排队（当前等待 ${size} 条），会在当前 turn 完成后执行。`);
 }
 
 async function handleTimeout(args: string, ctx: CommandContext): Promise<void> {

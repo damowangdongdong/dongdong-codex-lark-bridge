@@ -55,7 +55,9 @@ Every command has a concrete example and a visible result. Use `/help` in Feishu
 | `/attach` | `/attach` | Prints the exact `codex --remote ... resume ...` command for the same thread. |
 | `/permissions` | `/permissions workspace-write` | Sets the Codex permission for the current chat/topic; `/permission` is an alias. |
 | `/goal` | `/goal Fix login timeout` | Creates or updates a persistent Codex goal; `pause`, `resume`, and `clear` manage it. |
-| `/stop` | `/stop` | Interrupts a turn, or stops Codex background terminals when no turn is active. |
+| `/interupt` (`/interrupt`) | `/interupt` | Codex CLI Esc semantics: interrupt the active turn while preserving queued messages for the next context; with no active turn, flush an existing queue immediately. |
+| `/queue` | `/queue review the tests` | Queues one Codex instruction for the next turn; live cards do not contain a queue button. |
+| `/stop` | `/stop` | Stops the active turn immediately and clears queued messages; with no active Codex turn, stops background terminals. |
 | `/stop terminals`, `/clean` | `/stop terminals` | Stops all background terminals for the current Codex thread. |
 | `/timeout` | `/timeout 15` | Sets a 15-minute idle watchdog for the current scope; `off` disables and `default` clears the override. |
 | `/ps` | `/ps` | Lists Bridge processes for Claude, or Codex background terminals for Codex. |
@@ -71,9 +73,9 @@ Every command has a concrete example and a visible result. Use `/help` in Feishu
 
 ## Codex coverage
 
-The bridge keeps a Codex 0.152.x-compatible inventory. `/codex commands` prints it in Feishu. App-server examples include `/apps`, `/plugins`, `/hooks`, `/rename name`, `/archive`, `/delete` then `/delete confirm`, `/compact`, `/experimental`, `/memories`, `/skill name instruction`, `/skills`, `/mcp verbose`, `/model`, `/fast`, `/plan`, `/goal objective`, `/personality`, `/clean`, `/fork`, `/review`, `/usage`, `/debug-config`, and `/logout`; each returns the corresponding Codex result. Commands that depend on terminal-local TUI state, such as `/ide`, `/vim`, `/diff`, `/approve`, `/theme`, and `/quit`, return the exact `/attach` instruction instead of claiming to run remotely.
+The bridge keeps a Codex 0.152.x-compatible inventory. `/codex commands` prints it in Feishu. While a turn is running, directly mentioning the bot steers the current turn and `/queue <instruction>` queues the next context. `/interupt` (also `/interrupt`) follows Codex CLI Esc semantics: it interrupts the turn but preserves queued input; `/stop` interrupts and clears queued input. `/goal objective` updates the persistent goal through app-server without interrupting the current turn or clearing the queue. App-server examples include `/apps`, `/plugins`, `/hooks`, `/rename name`, `/archive`, `/delete` then `/delete confirm`, `/compact`, `/experimental`, `/memories`, `/skill name instruction`, `/skills`, `/mcp verbose`, `/model`, `/fast`, `/plan`, `/goal objective`, `/personality`, `/clean`, `/fork`, `/review`, `/usage`, `/debug-config`, and `/logout`; each returns the corresponding Codex result. Commands that depend on terminal-local TUI state, such as `/ide`, `/vim`, `/diff`, `/approve`, `/theme`, and `/quit`, return the exact `/attach` instruction instead of claiming to run remotely.
 
-While a turn runs, **↵ Insert now** steers it immediately and **⇥ Queue** waits until it finishes. `/attach` mirrors terminal input, progress, and final answers to Feishu without posting a duplicate full trace. After a resume, the bridge asks whether to post the history; if sent, it is packed into as few collapsed cards as the Feishu size limit allows.
+Live run cards contain status and collapsed tool records only. `/attach` mirrors terminal input, progress, and final answers to Feishu without posting a duplicate full trace. After a resume, the bridge asks whether to post the history; if sent, it is packed into as few collapsed cards as the Feishu size limit allows.
 
 ## Configuration and operations
 

@@ -106,19 +106,15 @@ describe('run card renderer snapshots', () => {
     expect(renderText(stateFrom([{ type: 'error', message: 'process failed', terminationReason: 'failed' }]))).toMatchSnapshot();
   });
 
-  it('injects signed bridge callback values for managed run controls', () => {
-    const card = renderCard(initialState, {
-      signCallback: (action) => `token-for-${action}`,
-    }) as {
-      body?: { elements?: Array<{ tag?: string; behaviors?: Array<{ value?: Record<string, unknown> }> }> };
+  it('does not render live action buttons', () => {
+    const card = renderCard(initialState) as {
+      body?: { elements?: Array<Record<string, unknown>> };
     };
-    const button = card.body?.elements?.find((element) => element.tag === 'button');
-
-    expect(button?.behaviors?.[0]?.value).toEqual({
-      cmd: 'stop',
-      __bridge_cb: true,
-      bridge_token: 'token-for-stop',
-    });
+    const rendered = JSON.stringify(card);
+    expect(card.body?.elements?.some((element) => element.tag === 'button')).toBe(false);
+    expect(rendered).not.toContain('立即插入');
+    expect(rendered).not.toContain('排队');
+    expect(rendered).not.toContain('终止');
   });
 
   it('keeps local paths in user-visible cards and text fallbacks', () => {

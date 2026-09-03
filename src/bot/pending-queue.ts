@@ -46,6 +46,25 @@ export class PendingQueue {
     return 1;
   }
 
+  size(scope: string): number {
+    return this.map.get(scope)?.messages.length ?? 0;
+  }
+
+  /** Flush a waiting batch immediately when no run is holding the scope. */
+  flushNow(scope: string): number {
+    if (this.blocked.has(scope)) return 0;
+    const entry = this.map.get(scope);
+    if (!entry) return 0;
+    if (entry.timer) clearTimeout(entry.timer);
+    this.map.delete(scope);
+    try {
+      this.onFlush(scope, entry.messages);
+    } catch (err) {
+      log.fail('queue', err, { scope, batchSize: entry.messages.length });
+    }
+    return entry.messages.length;
+  }
+
   cancel(scope: string): NormalizedMessage[] {
     const entry = this.map.get(scope);
     if (!entry) return [];

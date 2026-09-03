@@ -56,13 +56,14 @@ export async function handleCardAction(deps: CardDispatchDeps): Promise<void> {
   const operatorId = deps.evt.operator.openId;
   const chatId = deps.evt.chatId;
 
-  // CardKit 2.0 form submits drop user-input values from action.value; they
-  // arrive on raw.action.form_value. The SDK forwards the raw event when
-  // includeRawEvent: true is set on the channel options.
+  // CardKit 2.0 form submits drop user-input values from action.value. The
+  // SDK exposes them as action.formValue; older SDK/event shapes only expose
+  // raw.action.form_value, so keep that as a compatibility fallback.
+  const normalizedFormValue = deps.evt.action.formValue;
   const raw = (deps.evt as CardActionEvent & { raw?: unknown }).raw as
     | { action?: { form_value?: Record<string, unknown> } }
     | undefined;
-  const formValue = raw?.action?.form_value;
+  const formValue = normalizedFormValue ?? raw?.action?.form_value;
 
   // Resolve the click's session scope. For topic groups we need to know
   // the message's thread_id so the action targets the right topic's

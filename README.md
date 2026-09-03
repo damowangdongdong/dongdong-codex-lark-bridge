@@ -114,7 +114,9 @@ Cloud-doc comments are document-scoped：云文档评论按文档权限生效，
 
 | 命令 | 可复制的示例 | 执行后的效果 |
 |---|---|---|
-| `/stop` | `/stop` | 中断当前 turn；Codex 没有活动 turn 时改为停止当前 thread 的后台终端。 |
+| `/interupt`（`/interrupt`） | `/interupt` | 等效 Codex CLI 的 Esc：打断当前 turn，保留排队消息并让它们进入下一轮；没有活动 turn 但有队列时立即执行队列。 |
+| `/queue` | `/queue 检查测试` | 将一条 Codex 指令排到当前 turn 完成后的下一轮；运行卡不提供实体排队按钮。 |
+| `/stop` | `/stop` | 立即停止当前 turn 并清空排队消息；Codex 没有活动 turn 时停止当前 thread 的后台终端。 |
 | `/stop terminals` | `/stop terminals` | 停止当前 Codex thread 的全部后台终端；`/clean` 是同义命令。 |
 | `/timeout` | `/timeout 15` | 为当前 scope 设置 15 分钟空闲探活；agent 连续无输出达到时限会被终止。 |
 | `/timeout off` | `/timeout off` | 关闭当前 scope 的探活。 |
@@ -161,7 +163,7 @@ Web 控制台的会议设置还包括：被邀请时自动入会、字幕保留�
 
 ## Codex CLI 命令覆盖
 
-Codex profile 使用常驻 `codex app-server`。在 turn 运行时，运行卡上的 **↵ 立即插入** 会立即 steer 当前 turn，**⇥ 排队** 会等当前 turn 完成后再执行。普通 turn 只发送运行卡和最终回复，不会额外重复发送完整轨迹；恢复历史后可通过选择卡按需发送聚合的历史上下文。发送 `/codex commands` 可以在飞书里随时查看当前版本（兼容 Codex 0.152.x）的清单。
+Codex profile 使用常驻 `codex app-server`。运行卡只展示状态和折叠的工具记录，不再放置插入、排队或停止按钮。运行中直接 `@bot 内容` 会 steer 当前 turn；`/queue <指令>` 会排到下一轮；`/interupt`（`/interrupt`）等效 Codex CLI 的 Esc，打断当前 turn 并保留队列；`/stop` 则立即停止并清空排队消息。`/goal <目标>` 通过 app-server 更新持久目标，不打断当前 turn，也不清理队列。普通 turn 只发送运行卡和最终回复，不会额外重复发送完整轨迹；恢复历史后可通过选择卡按需发送聚合的历史上下文。发送 `/codex commands` 可以在飞书里随时查看当前版本（兼容 Codex 0.152.x）的清单。
 
 ### app-server 命令
 
@@ -206,7 +208,9 @@ Codex profile 使用常驻 `codex app-server`。在 turn 运行时，运行卡�
 | `/status` | `/status` | 显示 Codex profile、thread、cwd、权限和运行状态。 |
 | `/profile` | `/profile` | 在卡片中选择默认或命名 Codex CLI profile。 |
 | `/ps` | `/ps` | 列出当前 thread 的后台终端；`/ps bridge` 查看 Bridge 进程。 |
-| `/stop` | `/stop` | 中断活动 turn；没有活动 turn 时停止后台终端。 |
+| `/interupt`（`/interrupt`） | `/interupt` | 等效 Codex CLI 的 Esc：打断活动 turn 并保留排队消息；没有活动 turn 但有队列时立即执行队列。 |
+| `/queue` | `/queue 检查测试` | 将一条 Codex 指令排到当前 turn 完成后的下一轮。 |
+| `/stop` | `/stop` | 立即停止活动 turn 并清空排队消息；没有活动 turn 时停止后台终端。 |
 | `/exit` | `/exit 1` | 停止指定 Bridge 进程。 |
 | `/attach` | `/attach` | 输出附着当前 thread 的本机 Codex 命令。 |
 | `/codex commands` | `/codex commands` | 列出所有 Codex 兼容命令及执行位置；`/codex help` 同义。 |

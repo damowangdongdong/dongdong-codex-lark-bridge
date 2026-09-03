@@ -22,8 +22,6 @@ interface NoticeGroup {
 type Group = ToolGroup | TextGroup | UserGroup | NoticeGroup;
 
 export interface RunCardRenderOptions {
-  signCallback?: (action: string) => string;
-  interactiveInput?: boolean;
   codexContext?: { profile?: string; sandbox: string };
 }
 
@@ -70,8 +68,6 @@ export function renderCard(state: RunState, options: RunCardRenderOptions = {}):
 
   if (state.terminal === 'running') {
     if (state.footer) elements.push(footerStatus(state.footer));
-    if (options.interactiveInput) elements.push(codexInput(options));
-    elements.push(stopButton(options));
   }
 
   // Mask raw emails across every text field so the Feishu tenant audit doesn't
@@ -93,60 +89,6 @@ function codexContextLine(
   const profile = context.profile ? `--profile ${context.profile}` : '默认 profile';
   const thread = state.session?.threadId ? ` · thread ${state.session.threadId.slice(0, 8)}…` : '';
   return noteMd(`🧭 **Codex** · ${profile} · 🛡 ${context.sandbox}${thread}`);
-}
-
-function codexInput(options: RunCardRenderOptions): object {
-  const actionValue = (cmd: string): Record<string, unknown> => {
-    const value: Record<string, unknown> = { cmd, __bridge_cb: true };
-    if (options.signCallback) value.bridge_token = options.signCallback(cmd);
-    return value;
-  };
-  return {
-    tag: 'form',
-    name: 'codex_turn_input',
-    elements: [
-      {
-        tag: 'input',
-        name: 'codex_input',
-        placeholder: { tag: 'plain_text', content: '输入补充指令…' },
-        input_type: 'multiline_text',
-      },
-      {
-        tag: 'column_set',
-        flex_mode: 'flow',
-        horizontal_spacing: 'small',
-        columns: [
-          {
-            tag: 'column',
-            width: 'auto',
-            elements: [
-              {
-                tag: 'button',
-                name: 'codex_inject',
-                text: { tag: 'plain_text', content: '↵ 立即插入' },
-                type: 'primary',
-                form_action_type: 'submit',
-                behaviors: [{ type: 'callback', value: actionValue('codex.inject') }],
-              },
-            ],
-          },
-          {
-            tag: 'column',
-            width: 'auto',
-            elements: [
-              {
-                tag: 'button',
-                name: 'codex_queue',
-                text: { tag: 'plain_text', content: '⇥ 排队' },
-                form_action_type: 'submit',
-                behaviors: [{ type: 'callback', value: actionValue('codex.queue') }],
-              },
-            ],
-          },
-        ],
-      },
-    ],
-  };
 }
 
 function* groupBlocks(blocks: Block[]): Generator<Group> {
@@ -275,20 +217,6 @@ function markdown(content: string): object {
 
 function noteMd(content: string): object {
   return { tag: 'markdown', content, text_size: 'notation' };
-}
-
-function stopButton(options: RunCardRenderOptions): object {
-  const value: Record<string, unknown> = { cmd: 'stop' };
-  if (options.signCallback) {
-    value.__bridge_cb = true;
-    value.bridge_token = options.signCallback('stop');
-  }
-  return {
-    tag: 'button',
-    text: { tag: 'plain_text', content: '⏹ 终止' },
-    type: 'danger',
-    behaviors: [{ type: 'callback', value }],
-  };
 }
 
 function footerStatus(status: Exclude<FooterStatus, null>): object {

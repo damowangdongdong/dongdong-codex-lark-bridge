@@ -161,7 +161,7 @@ describe('Codex trace cards', () => {
     expect(history).toContain('旧卡片中的问题');
     expect(history).toContain('before');
     expect(history).toContain('after');
-    expect(history).not.toContain('show-card');
+    expect(history).toContain('show-card');
     expect(history).not.toContain('lark-channel-bridge 运行约定');
     expect(history).not.toContain('bridge_context');
     expect(history).not.toContain('bridge_instructions');
@@ -260,7 +260,7 @@ describe('Codex resumed-history cards', () => {
     }
   });
 
-  it('renders the conversation without duplicating internal execution trace items', () => {
+  it('renders conversation messages together with command execution results', () => {
     const result = {
       thread: {
         id: 'thread-history',
@@ -289,7 +289,10 @@ describe('Codex resumed-history cards', () => {
     expect(rendered).toContain('-end');
     expect(rendered).not.toContain('considering options');
     expect(rendered).not.toContain('working update');
-    expect(rendered).not.toContain('🛠 Command');
+    // Markdown escapes the underscore in the visible tool name.
+    expect(rendered).toContain('command\\\\_execution');
+    expect(rendered).toContain('pwd');
+    expect(rendered).toContain('/repo');
     expect(rendered).toContain('thread-history');
     expect(rendered).toContain('"expanded":false');
     for (const card of cards) {
@@ -327,7 +330,7 @@ describe('Codex resumed-history cards', () => {
     expect(rendered).toContain('开始任务');
     expect(rendered).toContain('中断前最后进度');
     expect(rendered).not.toContain('较早进度');
-    expect(rendered).not.toContain('internal output');
+    expect(rendered).toContain('internal output');
   });
 
   it('keeps retry and capacity errors visible in the full trace', () => {

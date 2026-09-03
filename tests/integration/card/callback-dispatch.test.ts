@@ -260,7 +260,7 @@ function cardEvent(
   formValue?: Record<string, unknown>,
 ): CardActionEvent {
   return {
-    action: { value },
+    action: { value, ...(formValue ? { formValue } : {}) },
     chatId: 'oc_group',
     messageId: 'om_card',
     operator: {

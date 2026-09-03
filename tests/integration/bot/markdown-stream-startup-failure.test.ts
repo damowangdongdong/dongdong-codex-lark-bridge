@@ -457,6 +457,37 @@ describe('markdown stream startup failures', () => {
     expect(finalJson).not.toContain('progress update');
     expect(h.channel.sent[0]?.options).toMatchObject({ replyTo: 'om_card_final' });
   });
+
+  it('keeps consuming the agent stream when a live card update fails', async () => {
+    let updateCount = 0;
+    const h = await createHarness({
+      messageReply: 'card',
+      events: [
+        { type: 'text', delta: 'progress before failed patch' },
+        { type: 'text', delta: 'progress after failed patch' },
+        { type: 'final_text', content: 'FINAL_AFTER_PATCH_FAILURE' },
+        { type: 'done', terminationReason: 'normal' },
+      ],
+      stream: async (_chatId, input) => {
+        const producer = (input as {
+          card?: { producer?: (ctrl: { update(next: unknown): Promise<void> }) => Promise<void> };
+        }).card?.producer;
+        await producer?.({
+          update: async () => {
+            updateCount += 1;
+            if (updateCount === 2) throw new Error('card patch rejected');
+          },
+        });
+      },
+    });
+    await startTestBridge(h);
+
+    await h.channel.handlers.message?.(message('om_card_patch_failure', 'run'));
+    await waitFor(() => h.channel.sent.length === 1);
+
+    expect(updateCount).toBeGreaterThanOrEqual(2);
+    expect(JSON.stringify(h.channel.sent.at(-1)?.content)).toContain('FINAL_AFTER_PATCH_FAILURE');
+  });
 });
 
 async function createHarness(options: {

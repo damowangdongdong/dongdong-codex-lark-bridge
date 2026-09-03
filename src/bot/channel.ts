@@ -322,7 +322,6 @@ export async function startChannel(deps: StartChannelDeps): Promise<BridgeChanne
           batch,
           controls,
           cotClient,
-          callbackAuth,
           activePolicyFingerprints,
           lastRunModelByScope,
           scope,
@@ -344,7 +343,6 @@ export async function startChannel(deps: StartChannelDeps): Promise<BridgeChanne
         external,
         activeRuns,
         pending,
-        callbackAuth,
         activePolicyFingerprints,
       }),
     ).catch((err) => log.fail('codex-external-turn', err));
@@ -573,7 +571,6 @@ export async function renderExternalCodexRun(input: {
   external: AgentExternalRun;
   activeRuns: ActiveRuns;
   pending: PendingQueue;
-  callbackAuth?: CallbackAuth;
   activePolicyFingerprints: Map<string, string>;
 }): Promise<void> {
   const { binding, run } = input.external;
@@ -604,32 +601,24 @@ export async function renderExternalCodexRun(input: {
     input.activePolicyFingerprints.set(binding.scopeId, binding.policyFingerprint);
   }
   const cardOptions: RunCardRenderOptions = {
-    interactiveInput: true,
     codexContext: { profile: binding.profile, sandbox: binding.sandbox },
-    ...(input.callbackAuth && binding.policyFingerprint
-      ? {
-          signCallback: (action: string) =>
-            input.callbackAuth!.sign({
-              runId: run.runId,
-              scope: binding.scopeId,
-              chatId: binding.chatId,
-              operatorOpenId: binding.operatorOpenId,
-              action,
-              policyFingerprint: binding.policyFingerprint!,
-              ttlMs: 24 * 60 * 60 * 1000,
-            }),
-        }
-      : {}),
   };
   let state: RunState = initialState;
   let controller: { update(next: object | ((current: object) => object)): Promise<void> } | undefined;
+  const safeUpdate = createSafeProgressUpdate(
+    binding.scopeId,
+    'card',
+    async (next: object): Promise<void> => {
+      if (controller) await controller.update(next);
+    },
+  );
   const consume = (async () => {
     for await (const event of run.events) {
       state = reduce(state, event);
-      if (controller) await controller.update(renderCard(state, cardOptions));
+      await safeUpdate(renderCard(state, cardOptions));
     }
     state = finalizeIfRunning(state);
-    if (controller) await controller.update(renderCard(state, cardOptions));
+    await safeUpdate(renderCard(state, cardOptions));
   })();
 
   try {
@@ -640,7 +629,7 @@ export async function renderExternalCodexRun(input: {
           initial: renderCard(state, cardOptions),
           producer: async (ctrl) => {
             controller = ctrl;
-            await ctrl.update(renderCard(state, cardOptions));
+            await safeUpdate(renderCard(state, cardOptions));
             await consume;
           },
         },
@@ -906,32 +895,26 @@ async function intakeMessage(deps: IntakeDeps): Promise<void> {
     pending,
   });
   if (handled) {
-    const dropped = pending.cancel(scope);
-    log.info('intake', 'command', { scope, droppedPending: dropped.length });
+    const command = emsg.content.trim().split(/\s+/, 1)[0] ?? '';
+    // /goal is a native Codex app-server update and deliberately does not
+    // interrupt the active turn. /interupt preserves queued messages so the
+    // interrupted turn can hand them to the next context. All other commands
+    // retain the existing command priority and clear stale pending input.
+    const preservePending = command === '/goal'
+      || command === '/interupt'
+      || command === '/interrupt'
+      || command === '/queue';
+    const dropped = preservePending ? [] : pending.cancel(scope);
+    log.info('intake', 'command', {
+      scope,
+      command,
+      droppedPending: dropped.length,
+      preservePending,
+    });
     return;
   }
 
   if (agent.id === 'codex') {
-    const queueMatch = emsg.content.trim().match(/^\/queue(?:\s+([\s\S]+))?$/);
-    if (queueMatch) {
-      const queuedContent = queueMatch[1]?.trim();
-      if (!queuedContent) {
-        await channel.send(
-          emsg.chatId,
-          { markdown: '用法：`/queue <下一条指令>`' },
-          { replyTo: emsg.messageId, ...(chatMode === 'topic' ? { replyInThread: true } : {}) },
-        );
-        return;
-      }
-      const size = pending.push(scope, { ...emsg, content: queuedContent });
-      await channel.send(
-        emsg.chatId,
-        { markdown: `⇥ 已排队（当前等待 ${size} 条），会在当前 turn 完成后执行。` },
-        { replyTo: emsg.messageId, ...(chatMode === 'topic' ? { replyInThread: true } : {}) },
-      );
-      return;
-    }
-
     const active = activeRuns.get(scope);
     if (active?.run.steer && emsg.resources.length === 0) {
       try {
@@ -967,7 +950,6 @@ interface RunBatchDeps {
   batch: NormalizedMessage[];
   controls: Controls;
   cotClient: CotClient;
-  callbackAuth?: CallbackAuth;
   activePolicyFingerprints: Map<string, string>;
   lastRunModelByScope: Map<string, string>;
   scope: string;
@@ -986,7 +968,6 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
     batch,
     controls,
     cotClient,
-    callbackAuth,
     activePolicyFingerprints,
     lastRunModelByScope,
     scope,
@@ -1238,31 +1219,14 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
     if (getShowToolCalls(controls.cfg)) return state;
     return { ...state, blocks: state.blocks.filter((b) => b.kind !== 'tool') };
   };
-  const cardRenderOptions: RunCardRenderOptions = {
-    ...(callbackAuth
-      ? {
-        signCallback: (action: string) =>
-          callbackAuth.sign({
-            runId: execution.runId,
-            scope,
-            chatId,
-            operatorOpenId: firstMsg.senderId,
-            action,
-            policyFingerprint: flow.policy.policyFingerprint,
-            ttlMs: 24 * 60 * 60 * 1000,
-          }),
-        }
-      : {}),
-    interactiveInput: controls.profileConfig.agentKind === 'codex',
-    ...(controls.profileConfig.agentKind === 'codex'
+  const cardRenderOptions: RunCardRenderOptions = controls.profileConfig.agentKind === 'codex'
       ? {
           codexContext: {
             profile: workspaces.codexProfileFor(scope, controls.profileConfig.codex?.profile),
             sandbox: flow.policy.sandbox,
           },
         }
-      : {}),
-  };
+      : {};
 
   // For non-card modes Claude's output doesn't surface visually until either
   // a first streamed token (markdown mode) or the whole run ends (text mode).
@@ -1328,6 +1292,13 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
       let cardCtrl:
         | { update(next: object | ((current: object) => object)): Promise<void> }
         | undefined;
+      const safeCardUpdate = createSafeProgressUpdate(
+        scope,
+        'card',
+        async (next: object): Promise<void> => {
+          if (cardCtrl) await cardCtrl.update(next);
+        },
+      );
       const progress = createLazyProgressStream(scope, replyMode, () =>
         channel.stream(
           chatId,
@@ -1338,7 +1309,7 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
                 producerStarted = true;
                 if (progress.abandoned()) return;
                 cardCtrl = ctrl;
-                await ctrl.update(renderCard(filterForPrefs(latestState), cardRenderOptions));
+                await safeCardUpdate(renderCard(filterForPrefs(latestState), cardRenderOptions));
                 await renderDone;
               },
             },
@@ -1355,9 +1326,7 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
         async (state) => {
           latestState = state;
           if (shouldOpenProgressStream(filterForPrefs(state))) progress.ensureOpen();
-          if (cardCtrl) {
-            await cardCtrl.update(renderCard(filterForPrefs(state), cardRenderOptions));
-          }
+          await safeCardUpdate(renderCard(filterForPrefs(state), cardRenderOptions));
         },
       );
       try {
@@ -1396,6 +1365,13 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
       let latestState: RunState = initialState;
       let producerStarted = false;
       let markdownCtrl: { setContent(markdown: string): Promise<void> } | undefined;
+      const safeMarkdownUpdate = createSafeProgressUpdate(
+        scope,
+        'markdown',
+        async (content: string): Promise<void> => {
+          if (markdownCtrl) await markdownCtrl.setContent(content);
+        },
+      );
       const progress = createLazyProgressStream(scope, replyMode, () =>
         channel.stream(
           chatId,
@@ -1404,7 +1380,7 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
               producerStarted = true;
               if (progress.abandoned()) return;
               markdownCtrl = ctrl;
-              await ctrl.setContent(renderText(filterForPrefs(latestState)));
+              await safeMarkdownUpdate(renderText(filterForPrefs(latestState)));
               await renderDone;
             },
           },
@@ -1420,9 +1396,7 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
         async (state) => {
           latestState = state;
           if (shouldOpenProgressStream(filterForPrefs(state))) progress.ensureOpen();
-          if (markdownCtrl) {
-            await markdownCtrl.setContent(renderText(filterForPrefs(state)));
-          }
+          await safeMarkdownUpdate(renderText(filterForPrefs(state)));
         },
       );
       try {
@@ -1646,7 +1620,7 @@ async function sendFinalReply(input: {
   state: RunState;
   replyMode: ReturnType<typeof getMessageReplyMode>;
   sendOpts?: { replyTo: string; replyInThread?: boolean };
-  cardRenderOptions: { signCallback?: (action: string) => string };
+  cardRenderOptions: RunCardRenderOptions;
 }): Promise<void> {
   const body = renderText(input.state);
 
@@ -1737,6 +1711,33 @@ function outboundLogFields(
     messageId: result?.messageId,
     replyTo: input.sendOpts?.replyTo,
     replyInThread: input.sendOpts?.replyInThread === true,
+  };
+}
+
+/**
+ * A progress update is best-effort UI state. Feishu may reject a patch after
+ * a card grows too large or the connection changes, but that must not stop
+ * consuming the agent stream or suppress the final answer. Disable further
+ * patches after the first failure and keep the run itself authoritative.
+ */
+function createSafeProgressUpdate<T>(
+  scope: string,
+  mode: 'card' | 'markdown',
+  update: (value: T) => Promise<void>,
+): (value: T) => Promise<void> {
+  let disabled = false;
+  return async (value: T): Promise<void> => {
+    if (disabled) return;
+    try {
+      await update(value);
+    } catch (err) {
+      disabled = true;
+      log.warn('outbound', 'progress-update-failed', {
+        scope,
+        mode,
+        err: err instanceof Error ? err.message : String(err),
+      });
+    }
   };
 }
 

@@ -42,22 +42,6 @@ exports[`run card renderer snapshots > collapses every contiguous tool group, in
         "tag": "markdown",
         "text_size": "notation",
       },
-      {
-        "behaviors": [
-          {
-            "type": "callback",
-            "value": {
-              "cmd": "stop",
-            },
-          },
-        ],
-        "tag": "button",
-        "text": {
-          "content": "⏹ 终止",
-          "tag": "plain_text",
-        },
-        "type": "danger",
-      },
     ],
   },
   "config": {
@@ -158,22 +142,6 @@ exports[`run card renderer snapshots > renders active and completed thinking 1`]
         "content": "🧠 正在思考",
         "tag": "markdown",
         "text_size": "notation",
-      },
-      {
-        "behaviors": [
-          {
-            "type": "callback",
-            "value": {
-              "cmd": "stop",
-            },
-          },
-        ],
-        "tag": "button",
-        "text": {
-          "content": "⏹ 终止",
-          "tag": "plain_text",
-        },
-        "type": "danger",
       },
     ],
   },
@@ -339,22 +307,6 @@ exports[`run card renderer snapshots > renders initial running state 1`] = `
         "tag": "markdown",
         "text_size": "notation",
       },
-      {
-        "behaviors": [
-          {
-            "type": "callback",
-            "value": {
-              "cmd": "stop",
-            },
-          },
-        ],
-        "tag": "button",
-        "text": {
-          "content": "⏹ 终止",
-          "tag": "plain_text",
-        },
-        "type": "danger",
-      },
     ],
   },
   "config": {
@@ -438,22 +390,6 @@ exports[`run card renderer snapshots > renders tool running, done, and error sta
         "content": "🧰 正在调用工具",
         "tag": "markdown",
         "text_size": "notation",
-      },
-      {
-        "behaviors": [
-          {
-            "type": "callback",
-            "value": {
-              "cmd": "stop",
-            },
-          },
-        ],
-        "tag": "button",
-        "text": {
-          "content": "⏹ 终止",
-          "tag": "plain_text",
-        },
-        "type": "danger",
       },
     ],
   },

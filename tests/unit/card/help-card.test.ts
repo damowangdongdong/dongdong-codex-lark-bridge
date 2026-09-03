@@ -19,8 +19,11 @@ describe('help card', () => {
     expect(rendered).toContain('/cd <绝对路径>');
     expect(rendered).toContain('Codex CLI profile');
     expect(rendered).toContain('/resume [N]');
-    expect(rendered).toContain('↵ 立即插入');
-    expect(rendered).toContain('⇥ 排队');
+    expect(rendered).toContain('/interupt');
+    expect(rendered).toContain('/queue <指令>');
+    expect(rendered).toContain('/goal');
+    expect(rendered).not.toContain('立即插入');
+    expect(rendered).not.toContain('⇥ 排队');
     expect(rendered).toContain('/codex commands');
     expect(rendered).toContain('附件');
     expect(rendered).toContain('云文档');

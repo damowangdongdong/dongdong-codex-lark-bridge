@@ -3,12 +3,13 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { NormalizedMessage } from '@larksuite/channel';
 import { ActiveRuns } from '../../../src/bot/active-runs.js';
+import { PendingQueue } from '../../../src/bot/pending-queue.js';
 import { tryHandleCommand, type CommandContext, type Controls } from '../../../src/commands/index.js';
 import { createDefaultProfileConfig, type ProfileConfig } from '../../../src/config/profile-schema.js';
 import { createRootConfig, loadRootConfig, saveRootConfig } from '../../../src/config/profile-store.js';
 import { SessionStore } from '../../../src/session/store.js';
 import { WorkspaceStore } from '../../../src/workspace/store.js';
-import { createFakeAgent } from '../../helpers/fake-agent.js';
+import { createFakeAgent, type FakeAgentRun } from '../../helpers/fake-agent.js';
 import { createFakeChannel, type FakeChannel } from '../../helpers/fake-channel.js';
 import { createTmpProfile, type TmpProfile } from '../../helpers/tmp-profile.js';
 
@@ -26,6 +27,8 @@ interface Harness {
   sessions: SessionStore;
   workspaces: WorkspaceStore;
   activeRuns: ActiveRuns;
+  pending: PendingQueue;
+  flushed: NormalizedMessage[][];
   agent: ReturnType<typeof createFakeAgent>;
   controls: Controls;
   run(content: string, overrides?: RunOverrides): Promise<boolean>;
@@ -311,6 +314,64 @@ describe('Bridge command contracts', () => {
     const root = await loadRootConfig(h.controls.configPath);
     expect(root?.profiles.claude?.access.allowedChats).toEqual(['oc-group-1', 'oc-group-2']);
   });
+
+  it('interrupts the active run while preserving queued messages', async () => {
+    const h = await createHarness();
+    const activeRun = h.agent.run({ runId: 'run-active', prompt: 'running' }) as FakeAgentRun;
+    h.activeRuns.register('chat-1', activeRun);
+    h.pending.push('chat-1', message('queued', {
+      chatId: 'chat-1',
+      senderId: 'ou-admin',
+    }));
+
+    await expect(h.run('/interupt')).resolves.toBe(true);
+
+    expect(activeRun.stopped).toBe(true);
+    expect(h.pending.size('chat-1')).toBe(1);
+    expect(lastMarkdown(h.channel)).toContain('排队消息会直接进入下一轮');
+  });
+
+  it('flushes queued messages immediately when interrupt has no active run', async () => {
+    const h = await createHarness();
+    h.pending.push('chat-1', message('queued', {
+      chatId: 'chat-1',
+      senderId: 'ou-admin',
+    }));
+
+    await expect(h.run('/interupt')).resolves.toBe(true);
+
+    expect(h.pending.size('chat-1')).toBe(0);
+    expect(h.flushed).toHaveLength(1);
+    expect(h.flushed[0]?.[0]?.content).toBe('queued');
+  });
+
+  it('stops the active run and discards queued messages', async () => {
+    const h = await createHarness();
+    const activeRun = h.agent.run({ runId: 'run-active', prompt: 'running' }) as FakeAgentRun;
+    h.activeRuns.register('chat-1', activeRun);
+    h.pending.push('chat-1', message('queued', {
+      chatId: 'chat-1',
+      senderId: 'ou-admin',
+    }));
+
+    await expect(h.run('/stop')).resolves.toBe(true);
+
+    expect(activeRun.stopped).toBe(true);
+    expect(h.pending.size('chat-1')).toBe(0);
+  });
+
+  it('routes Codex /queue through the command dispatcher', async () => {
+    const h = await createHarness();
+    // The command contract is keyed by the adapter identity. This harness
+    // otherwise uses Claude to exercise the shared command infrastructure.
+    (h.agent as unknown as { id: string }).id = 'codex';
+
+    await expect(h.run('/queue review the tests')).resolves.toBe(true);
+
+    expect(h.pending.size('chat-1')).toBe(1);
+    expect(h.pending.cancel('chat-1')[0]?.content).toBe('review the tests');
+    expect(lastMarkdown(h.channel)).toContain('已排队');
+  });
 });
 
 async function createHarness(): Promise<Harness> {
@@ -319,6 +380,10 @@ async function createHarness(): Promise<Harness> {
   const sessions = new SessionStore(join(tmp.profile, 'sessions.json'));
   const workspaces = new WorkspaceStore(join(tmp.profile, 'workspaces.json'));
   const activeRuns = new ActiveRuns();
+  const flushed: NormalizedMessage[][] = [];
+  const pending = new PendingQueue(60_000, (_scope, batch) => {
+    flushed.push(batch);
+  });
   const agent = createFakeAgent();
   const workspaceRealpath = await realpath(tmp.workspace);
   const profileConfig = appConfig(workspaceRealpath);
@@ -356,16 +421,18 @@ async function createHarness(): Promise<Harness> {
       workspaces,
       agent,
       activeRuns,
+      pending,
       controls,
     });
   };
 
   cleanups.push(async () => {
+    pending.cancelAll();
     await Promise.all([sessions.flush(), workspaces.flush()]);
     await tmp.cleanup();
   });
 
-  return { tmp, channel, sessions, workspaces, activeRuns, agent, controls, run };
+  return { tmp, channel, sessions, workspaces, activeRuns, pending, flushed, agent, controls, run };
 }
 
 function appConfig(defaultWorkspace: string): ProfileConfig {
