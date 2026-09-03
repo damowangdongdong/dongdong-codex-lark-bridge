@@ -1,4 +1,5 @@
 import { deepMaskEmails } from './mask-email';
+import { codexThreadIdMarkdown } from './copyable-code';
 import type { Block, FooterStatus, NoticeEntry, RunState, ToolEntry } from './run-state';
 import { toolHeaderText } from './tool-render';
 
@@ -96,7 +97,9 @@ function codexContextLine(
   context: NonNullable<RunCardRenderOptions['codexContext']>,
 ): object {
   const profile = context.profile ? `--profile ${context.profile}` : '默认 profile';
-  const thread = state.session?.threadId ? ` · thread ${state.session.threadId.slice(0, 8)}…` : '';
+  const thread = state.session?.threadId
+    ? `\n\n${codexThreadIdMarkdown(state.session.threadId)}`
+    : '';
   return noteMd(`🧭 **Codex** · ${profile} · 🛡 ${context.sandbox}${thread}`);
 }
 

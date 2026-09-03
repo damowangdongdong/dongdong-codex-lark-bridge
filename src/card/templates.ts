@@ -1,3 +1,5 @@
+import { codexThreadIdMarkdown } from './copyable-code';
+
 interface ButtonSpec {
   text: string;
   value: Record<string, unknown>;
@@ -245,6 +247,7 @@ export interface StatusInfo {
   profileName: string;
   cwd?: string;
   sessionId?: string;
+  copyableSessionId?: boolean;
   emptySessionText?: string;
   sessionLabel?: string;
   sessionStale: boolean;
@@ -268,9 +271,15 @@ export interface StatusInfo {
 }
 
 export function statusCard(info: StatusInfo): object {
-  const sessionLine = info.sessionId
-    ? `\`${info.sessionId.slice(0, 8)}…\`${info.sessionStale ? ' ⚠️ 旧工作目录，下一条会新建' : ''}`
-    : (info.emptySessionText ?? '(无)');
+  const sessionLabel = escapeMd(info.sessionLabel ?? '会话');
+  const sessionLines = info.sessionId
+    ? info.copyableSessionId
+      ? [codexThreadIdMarkdown(info.sessionId, info.sessionLabel ?? 'Codex 会话')]
+      : [
+          `🔗 **${sessionLabel}**: \`${info.sessionId.slice(0, 8)}…\`` +
+          (info.sessionStale ? ' ⚠️ 旧工作目录，下一条会新建' : ''),
+        ]
+    : [`🔗 **${sessionLabel}**: ${info.emptySessionText ?? '(无)'}`];
   // For topic groups, surface that the scope is per-topic so the user
   // knows /cd / /new only affect this topic.
   const scopeLine =
@@ -293,7 +302,7 @@ export function statusCard(info: StatusInfo): object {
     `🧭 **对话范围**: ${scopeLine}`,
     `🧩 **Bridge 配置**: ${escapeMd(info.profileName)}`,
     `📁 **工作目录**: ${cwdLine}`,
-    `🔗 **${escapeMd(info.sessionLabel ?? '会话')}**: ${sessionLine}`,
+    ...sessionLines,
     `🤖 **Agent**: ${escapeMd(info.agentName)}`,
     ...(info.codexProfile ? [`⚙️ **Codex 配置**: ${escapeMd(info.codexProfile)}`] : []),
     `🛡 **${escapeMd(info.runtimeAccess.label)}**: ${escapeMd(info.runtimeAccess.value)}`,
@@ -477,7 +486,7 @@ export interface ResumeEntry {
 export function resumeCard(
   cwd: string,
   entries: ResumeEntry[],
-  options: { showNewCodexAction?: boolean } = {},
+  options: { showNewCodexAction?: boolean; copyableIds?: boolean } = {},
 ): object {
   const elements: object[] = [];
   elements.push(divMd(`当前 cwd：\`${escapeCode(cwd)}\``));
@@ -507,7 +516,10 @@ export function resumeCard(
     const displayId = e.displayId ?? e.sessionId;
     elements.push(
       divMd(
-        `**${i + 1}.** ${escapeMd(e.preview)}${marker}\n\`${escapeCode(displayId)}\` · ${escapeMd(e.relTime)} · ${escapeMd(detail)}`,
+        `**${i + 1}.** ${escapeMd(e.preview)}${marker}\n${escapeMd(e.relTime)} · ${escapeMd(detail)}\n` +
+        (options.copyableIds
+          ? codexThreadIdMarkdown(displayId)
+          : `\`${escapeCode(displayId)}\``),
       ),
     );
     elements.push(
@@ -541,8 +553,9 @@ export function resumeCard(
 export function resumeTakeoverCard(threadId: string, nonce: string): object {
   return shell('⚠️ Codex 会话正在使用中', [
     divMd(
-      `thread \`${escapeCode(threadId.slice(0, 8))}…\` 正由另一个 Codex 进程持有。` +
-      '\n\n接管会终止该 Codex 进程，其中正在运行的其他会话也会中断。',
+      '此 Codex thread 正由另一个 Codex 进程持有。\n\n' +
+      `${codexThreadIdMarkdown(threadId)}\n\n` +
+      '接管会终止该 Codex 进程，其中正在运行的其他会话也会中断。',
     ),
     actions([
       {

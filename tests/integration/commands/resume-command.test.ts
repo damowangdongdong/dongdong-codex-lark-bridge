@@ -113,7 +113,14 @@ describe('agent-aware resume commands', () => {
 
     expect(h.channel.sent).toHaveLength(2);
     expect(h.channel.sent[0]?.content).toEqual({
-      markdown: '上一个 Codex 会话 ID：`0199-old-thread`',
+      markdown: [
+        '上一个 Codex 会话：',
+        '',
+        '🔗 **Codex thread ID**（点击代码块右上角复制）',
+        '```text',
+        '0199-old-thread',
+        '```',
+      ].join('\n'),
     });
     expect(h.channel.sent[1]?.content).toEqual({ markdown: '已开始新会话。' });
     expect(h.catalog.activeFor(h.identity)).toBeUndefined();
@@ -270,8 +277,8 @@ describe('agent-aware resume commands', () => {
     const rendered = JSON.stringify(card);
     expect(rendered).toContain('alpha prompt');
     expect(rendered).toContain('beta prompt');
-    expect(rendered).toContain('thread-alpha-secret');
-    expect(rendered).toContain('thread-beta-secret');
+    expect(rendered).toContain('```text\\nthread-alpha-secret\\n```');
+    expect(rendered).toContain('```text\\nthread-beta-secret\\n```');
 
     const nonces = resumeArgsFromCard(card);
     expect(nonces).toHaveLength(2);
@@ -299,6 +306,7 @@ describe('agent-aware resume commands', () => {
     });
     const historyCard = lastContentString(h.channel);
     expect(historyCard).toContain('Codex 历史');
+    expect(historyCard).toContain('```text\\nthread-beta-secret\\n```');
     expect(historyCard).toContain('historic question');
     expect(historyCard).toContain('historic answer');
   });
@@ -417,6 +425,7 @@ describe('agent-aware resume commands', () => {
     const card = lastContent(h.channel);
     expect(JSON.stringify(card)).toContain('终止占用并接管');
     expect(JSON.stringify(card)).toContain('confirm');
+    expect(lastContentString(h.channel)).toContain('```text\\nthread-busy\\n```');
     expect(takeoverArgsFromCard(card)).toHaveLength(1);
     expect(h.catalog.activeFor(h.identity)).toBeUndefined();
   });
@@ -532,7 +541,8 @@ describe('agent-aware resume commands', () => {
 
     status = JSON.stringify(lastContent(h.channel));
     expect(status).toContain('**Codex 会话**');
-    expect(status).toContain('thread-c');
+    expect(status).toContain('```text\\nthread-current\\n```');
+    expect(status).not.toContain('thread-c…');
     expect(status).not.toContain('未建立');
   });
 
@@ -940,9 +950,21 @@ describe('agent-aware resume commands', () => {
 
     await expect(h.run('/attach')).resolves.toBe(true);
 
+    expect(lastMarkdown(h.channel)).toContain('```text\nthread-current\n```');
     expect(lastMarkdown(h.channel)).toContain(
-      'codex --remote unix:///tmp/fake-codex.sock resume thread-current',
+      '```bash\ncodex --remote unix:///tmp/fake-codex.sock resume thread-current\n```',
     );
+  });
+
+  it('renders the full forked Codex thread ID in a native copyable code block', async () => {
+    const h = await createHarness('codex');
+    h.catalog.upsertActive({ ...h.identity, threadId: 'thread-current', now: 1000 });
+    h.agent.setAppServerResponse('thread/fork', { thread: { id: 'thread-forked-full-id' } });
+
+    await expect(h.run('/fork')).resolves.toBe(true);
+
+    expect(lastMarkdown(h.channel)).toContain('```text\nthread-forked-full-id\n```');
+    expect(h.catalog.activeFor(h.identity)).toMatchObject({ threadId: 'thread-forked-full-id' });
   });
 
   it('includes the selected profile in attach and attached-TUI commands', async () => {
@@ -1233,6 +1255,7 @@ describe('agent-aware resume commands', () => {
 
     await expect(h.run('/delete')).resolves.toBe(true);
     expect(lastMarkdown(h.channel)).toContain('/delete confirm');
+    expect(lastMarkdown(h.channel)).toContain('```text\nthread-current\n```');
     expect(h.agent.appServerRequests.some((request) => request.method === 'thread/delete')).toBe(false);
 
     await expect(h.run('/delete confirm')).resolves.toBe(true);
@@ -1260,6 +1283,7 @@ describe('agent-aware resume commands', () => {
 
     await expect(h.run('/theme')).resolves.toBe(true);
     expect(lastMarkdown(h.channel)).toContain('codex --remote');
+    expect(lastMarkdown(h.channel)).toContain('```text\nthread-current\n```');
     await expect(h.run('/btw')).resolves.toBe(true);
     expect(lastMarkdown(h.channel)).toContain('codex --remote');
     await expect(h.run('/does-not-exist')).resolves.toBe(true);

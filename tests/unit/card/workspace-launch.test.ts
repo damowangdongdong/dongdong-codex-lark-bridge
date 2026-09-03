@@ -3,6 +3,8 @@ import {
   codexSkillsCard,
   resumeCard,
   resumeHistoryChoiceCard,
+  resumeTakeoverCard,
+  statusCard,
   workspaceLaunchCard,
   workspaceNewCard,
 } from '../../../src/card/templates.js';
@@ -27,6 +29,18 @@ function actions(card: unknown): Record<string, unknown>[] {
   return found;
 }
 
+function textContent(card: unknown): string {
+  const found: string[] = [];
+  walk(card, (record) => {
+    if (typeof record.content === 'string') found.push(record.content);
+  });
+  return found.join('\n');
+}
+
+function expectCopyableThreadId(card: unknown, threadId: string): void {
+  expect(textContent(card)).toContain(`\`\`\`text\n${threadId}\n\`\`\``);
+}
+
 describe('Codex workspace launch cards', () => {
   it('offers a direct resume callback from the workspace selection form', () => {
     const card = workspaceLaunchCard({
@@ -40,7 +54,7 @@ describe('Codex workspace launch cards', () => {
     expect(actions(card)).toContainEqual({ cmd: 'ws.resume' });
   });
 
-  it('renders Codex thread IDs as selectable code and offers new-session action', () => {
+  it('renders each full Codex thread ID in a native copyable code block', () => {
     const threadId = '019abcde-0123-4567-89ab-cdef01234567';
     const card = resumeCard('/data/project', [{
       sessionId: 'resume-nonce',
@@ -48,12 +62,34 @@ describe('Codex workspace launch cards', () => {
       preview: 'research run',
       relTime: '刚刚',
       detail: 'Codex · cli',
-    }], { showNewCodexAction: true });
+    }], { showNewCodexAction: true, copyableIds: true });
 
-    expect(JSON.stringify(card)).toContain('`' + threadId + '`');
-    expect(JSON.stringify(card)).not.toContain('复制 ID');
+    expectCopyableThreadId(card, threadId);
+    expect(textContent(card)).toContain('点击代码块右上角复制');
     expect(JSON.stringify(card)).not.toContain('resume.copy');
     expect(actions(card)).toContainEqual({ cmd: 'ws.new' });
+  });
+
+  it('renders Codex status and takeover IDs as full copyable code blocks', () => {
+    const threadId = '019abcde-0123-4567-89ab-cdef01234567';
+    const status = statusCard({
+      profileName: 'default',
+      sessionId: threadId,
+      copyableSessionId: true,
+      sessionStale: false,
+      agentName: 'Codex',
+      runtimeAccess: { label: '权限', value: 'Full access' },
+      activeRun: false,
+      ownerState: '正常',
+      scope: 'oc_chat',
+      chatMode: 'group',
+    });
+    const takeover = resumeTakeoverCard(threadId, 'nonce');
+
+    expectCopyableThreadId(status, threadId);
+    expectCopyableThreadId(takeover, threadId);
+    expect(textContent(status)).not.toContain(`${threadId.slice(0, 8)}…`);
+    expect(textContent(takeover)).not.toContain(`${threadId.slice(0, 8)}…`);
   });
 
   it('renders each skill in its own collapsible panel within the paged card', () => {

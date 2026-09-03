@@ -74,6 +74,7 @@ import * as configOps from '../config/config-ops';
 import { log, reportMetric } from '../core/logger';
 import { renderCard } from '../card/run-renderer';
 import { renderCodexHistoryCards } from '../card/codex-trace';
+import { codexThreadIdMarkdown, copyableShellCommandMarkdown } from '../card/copyable-code';
 import {
   finalizeIfRunning,
   initialState,
@@ -406,7 +407,7 @@ async function handleNew(args: string, ctx: CommandContext): Promise<void> {
   }
   ctx.sessions.clear(ctx.scope);
   if (previousCodexThreadId) {
-    await reply(ctx, `上一个 Codex 会话 ID：\`${previousCodexThreadId}\``);
+    await reply(ctx, `上一个 Codex 会话：\n\n${codexThreadIdMarkdown(previousCodexThreadId)}`);
   }
   await reply(ctx, wasRunning ? '已中断当前任务并开始新会话。' : '已开始新会话。');
 }
@@ -614,9 +615,11 @@ async function handleAttach(_args: string, ctx: CommandContext): Promise<void> {
   await reply(
     ctx,
     [
+      codexThreadIdMarkdown(remote.threadId),
+      '',
       '在本机终端运行以下命令，即可附着到与飞书相同的 Codex thread：',
       '',
-      `\`${codexAttachCommand(remote.endpoint, remote.threadId, remote.profile)}\``,
+      copyableShellCommandMarkdown(codexAttachCommand(remote.endpoint, remote.threadId, remote.profile)),
       '',
       '附着后，终端与飞书共享同一个 app-server 和 thread。',
     ].join('\n'),
@@ -843,7 +846,8 @@ async function handleCodexDelete(args: string, ctx: CommandContext): Promise<voi
   if (args.trim().toLowerCase() !== 'confirm') {
     await reply(
       ctx,
-      `永久删除 thread \`${threadId.slice(0, 8)}…\` 及其子会话；确认请发送 \`/delete confirm\`。`,
+      `将永久删除此 thread 及其子会话：\n\n${codexThreadIdMarkdown(threadId)}` +
+      '\n\n确认请发送 `/delete confirm`。',
     );
     return;
   }
@@ -871,7 +875,7 @@ async function handleCodexFork(ctx: CommandContext): Promise<void> {
   ctx.sessionCatalog.upsertActive({ ...identity, threadId: newThreadId, now: Date.now() });
   ctx.workspaces.confirmCodexResume(ctx.scope);
   bindCodexThread(ctx, newThreadId, identity.cwdRealpath);
-  await reply(ctx, `✓ 已 fork 并切换到 thread \`${newThreadId.slice(0, 8)}…\`。`);
+  await reply(ctx, `✓ 已 fork 并切换到新 thread。\n\n${codexThreadIdMarkdown(newThreadId)}`);
 }
 
 async function handleCodexGoal(args: string, ctx: CommandContext): Promise<void> {
@@ -1344,7 +1348,10 @@ async function replyWithAttachHint(ctx: CommandContext, reason: string): Promise
   }
   await reply(
     ctx,
-    `${reason}。请在附着终端中执行：\n\n\`${codexAttachCommand(remote.endpoint, remote.threadId, remote.profile)}\``,
+    `${reason}。\n\n${codexThreadIdMarkdown(remote.threadId)}\n\n` +
+      `请在附着终端中执行：\n\n${copyableShellCommandMarkdown(
+        codexAttachCommand(remote.endpoint, remote.threadId, remote.profile),
+      )}`,
   );
 }
 
@@ -2127,7 +2134,7 @@ async function handleResume(args: string, ctx: CommandContext): Promise<void> {
           current: thread.threadId === entry?.threadId,
         };
       });
-      const card = resumeCard(cwd, entries, { showNewCodexAction: true });
+      const card = resumeCard(cwd, entries, { showNewCodexAction: true, copyableIds: true });
       await ctx.channel.send(ctx.msg.chatId, { card }, commandReplyOptions(ctx));
       return;
     }
@@ -2143,7 +2150,7 @@ async function handleResume(args: string, ctx: CommandContext): Promise<void> {
             relTime: '当前',
             detail: 'Codex · 当前会话',
             current: true,
-          }], { showNewCodexAction: true }),
+          }], { showNewCodexAction: true, copyableIds: true }),
         },
         commandReplyOptions(ctx),
       );
@@ -2610,6 +2617,7 @@ async function handleStatus(_args: string, ctx: CommandContext): Promise<void> {
     profileName: ctx.controls.profile,
     cwd,
     sessionId: isCodex ? catalogEntry?.threadId : sess?.sessionId,
+    copyableSessionId: isCodex,
     emptySessionText: isCodex ? '(未建立)' : undefined,
     sessionLabel: isCodex ? 'Codex 会话' : '会话',
     sessionStale: !isCodex && Boolean(cwd && sess && sess.cwd !== cwd),

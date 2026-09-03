@@ -2,6 +2,7 @@ import type { NoticeEntry, RunState, ToolEntry } from './run-state';
 import { extractBridgeUserInput, redactEmbeddedBridgePrompts } from '../agent/prompt';
 import { normalizeSessionPreview } from '../session/preview';
 import { deepMaskEmails } from './mask-email';
+import { codexThreadIdMarkdown } from './copyable-code';
 
 const SECTION_CHARS = 7_000;
 const PAGE_CHARS = 12_000;
@@ -62,7 +63,7 @@ export function renderCodexHistoryCards(result: unknown, cwd: string): object[] 
   const threadId = stringValue(thread.id) ?? '';
   const name = [stringValue(thread.name), stringValue(thread.preview)]
     .map((value) => normalizeSessionPreview(value ?? ''))
-    .find(Boolean) ?? threadId;
+    .find(Boolean) ?? '(未命名)';
   const turns = Array.isArray(thread.turns) ? thread.turns : [];
   const sections: TraceSection[] = [];
   turns.forEach((rawTurn, turnIndex) => {
@@ -94,7 +95,7 @@ export function renderCodexHistoryCards(result: unknown, cwd: string): object[] 
   const pages = paginate(sections, HISTORY_PAGE_CHARS).map(historyPageSection);
   return pages.map((page, index) => traceCard(
     `🔁 Codex 历史 ${index + 1}/${pages.length}`,
-    `**${escapeMd(name || '(未命名)')}** · \`${escapeCode(threadId)}\`\n📁 \`${escapeCode(cwd)}\``,
+    `**${escapeMd(name)}**\n📁 \`${escapeCode(cwd)}\`\n\n${codexThreadIdMarkdown(threadId)}`,
     [page],
     `📚 完整历史对话${pages.length > 1 ? ` · ${index + 1}/${pages.length}` : ''}`,
     page.body,
@@ -291,11 +292,11 @@ function panelHeader(title: string): object {
 }
 
 function contextLine(context: { profile?: string; sandbox: string }, threadId?: string): string {
-  return [
+  const details = [
     `⚙️ ${context.profile ? `\`--profile ${escapeCode(context.profile)}\`` : '默认 profile'}`,
     `🛡 **${escapeMd(context.sandbox)}**`,
-    ...(threadId ? [`🔗 \`${escapeCode(threadId)}\``] : []),
   ].join(' · ');
+  return threadId ? `${details}\n\n${codexThreadIdMarkdown(threadId)}` : details;
 }
 
 function contentText(item: Record<string, unknown>): string {

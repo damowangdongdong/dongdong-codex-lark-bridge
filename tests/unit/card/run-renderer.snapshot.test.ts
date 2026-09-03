@@ -53,6 +53,16 @@ describe('run card renderer snapshots', () => {
     expect(rendered).toContain('"expanded":false');
   });
 
+  it('renders the full Codex thread ID in a native copyable code block', () => {
+    const threadId = '019abcde-0123-4567-89ab-cdef01234567';
+    const rendered = JSON.stringify(renderCard(stateFrom([
+      { type: 'system', threadId },
+    ]), { codexContext: { profile: 'freerouter', sandbox: 'danger-full-access' } }));
+
+    expect(rendered).toContain(`\`\`\`text\\n${threadId}\\n\`\`\``);
+    expect(rendered).not.toContain(`${threadId.slice(0, 8)}…`);
+  });
+
   it('keeps a single running tool collapsed by default', () => {
     const rendered = renderCard(stateFrom([
       { type: 'tool_use', id: 'tool-1', name: 'Bash', input: { command: 'pwd' } },

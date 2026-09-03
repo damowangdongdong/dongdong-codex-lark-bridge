@@ -35,6 +35,7 @@ describe('Codex trace cards', () => {
     expect(rendered).toContain('Token usage');
     expect(rendered).toContain('--profile freerouter');
     expect(rendered).toContain('thread-1');
+    expect(rendered).toContain('```text\\nthread-1\\n```');
     expect(rendered).toContain('"expanded":false');
   });
 
@@ -292,6 +293,7 @@ describe('Codex resumed-history cards', () => {
     expect(rendered).not.toContain('command_execution');
     expect(rendered).not.toContain('pwd');
     expect(rendered).toContain('thread-history');
+    expect(rendered).toContain('```text\\nthread-history\\n```');
     expect(rendered).toContain('"expanded":false');
     for (const card of cards) {
       const body = (card as { body: { elements: Array<Record<string, unknown>> } }).body;
