@@ -58,7 +58,7 @@ export class CodexHistoryError extends Error {
   }
 }
 
-const DEFAULT_HISTORY_TIMEOUT_MS = 180_000;
+const DEFAULT_HISTORY_TIMEOUT_MS = 300_000;
 const DEFAULT_SOURCE_KINDS: readonly CodexThreadSourceKind[] = [
   'cli',
   'vscode',
