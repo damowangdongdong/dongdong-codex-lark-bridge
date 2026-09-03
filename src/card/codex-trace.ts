@@ -97,6 +97,7 @@ export function renderCodexHistoryCards(result: unknown, cwd: string): object[] 
     `**${escapeMd(name || '(未命名)')}** · \`${escapeCode(threadId)}\`\n📁 \`${escapeCode(cwd)}\``,
     [page],
     `📚 完整历史对话${pages.length > 1 ? ` · ${index + 1}/${pages.length}` : ''}`,
+    page.body,
   ));
 }
 
@@ -214,6 +215,7 @@ function traceCard(
   context: string,
   sections: TraceSection[],
   outerPanelTitle?: string,
+  outerPanelBody?: string,
 ): object {
   const panels = sections.map(tracePanel);
   return deepMaskEmails({
@@ -224,10 +226,31 @@ function traceCard(
       elements: [
         { tag: 'markdown', content: context, text_size: 'notation' },
         { tag: 'hr' },
-        ...(outerPanelTitle ? [tracePanelGroup(outerPanelTitle, panels)] : panels),
+        ...(outerPanelTitle
+          ? [outerPanelBody === undefined
+            ? tracePanelGroup(outerPanelTitle, panels)
+            : tracePanelGroupContent(outerPanelTitle, outerPanelBody)]
+          : panels),
       ],
     },
   });
+}
+
+/**
+ * CardKit does not render collapsible panels nested inside another
+ * collapsible panel. History pages therefore use one outer panel with a
+ * single markdown element containing the already-formatted transcript.
+ */
+function tracePanelGroupContent(title: string, content: string): object {
+  return {
+    tag: 'collapsible_panel',
+    expanded: false,
+    header: panelHeader(title),
+    border: { color: 'grey', corner_radius: '5px' },
+    vertical_spacing: '8px',
+    padding: '8px 8px 8px 8px',
+    elements: [{ tag: 'markdown', content, text_size: 'notation' }],
+  };
 }
 
 function tracePanelGroup(title: string, elements: object[]): object {

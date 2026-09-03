@@ -1,6 +1,6 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
-exports[`run card renderer snapshots > collapses consecutive tools while preserving the latest running tool 1`] = `
+exports[`run card renderer snapshots > collapses every contiguous tool group, including the latest running tool 1`] = `
 {
   "body": {
     "elements": [
@@ -12,7 +12,8 @@ exports[`run card renderer snapshots > collapses consecutive tools while preserv
         "elements": [
           {
             "content": "- ✅ **Bash** — pwd
-- ✅ **Read** — /repo/a.ts",
+- ✅ **Read** — /repo/a.ts
+- ⏳ **Edit** — /repo/a.ts",
             "tag": "markdown",
             "text_size": "notation",
           },
@@ -27,40 +28,7 @@ exports[`run card renderer snapshots > collapses consecutive tools while preserv
           "icon_expanded_angle": -180,
           "icon_position": "follow_text",
           "title": {
-            "content": "☕ **2 个工具调用**",
-            "tag": "markdown",
-          },
-          "vertical_align": "center",
-        },
-        "padding": "8px 8px 8px 8px",
-        "tag": "collapsible_panel",
-        "vertical_spacing": "8px",
-      },
-      {
-        "border": {
-          "color": "grey",
-          "corner_radius": "5px",
-        },
-        "elements": [
-          {
-            "content": "**File** \`/repo/a.ts\`
-
-_运行中…_",
-            "tag": "markdown",
-            "text_size": "notation",
-          },
-        ],
-        "expanded": false,
-        "header": {
-          "icon": {
-            "size": "16px 16px",
-            "tag": "standard_icon",
-            "token": "down-small-ccm_outlined",
-          },
-          "icon_expanded_angle": -180,
-          "icon_position": "follow_text",
-          "title": {
-            "content": "⏳ **Edit** — /repo/a.ts",
+            "content": "☕ **3 个工具调用**",
             "tag": "markdown",
           },
           "vertical_align": "center",
@@ -102,7 +70,7 @@ _运行中…_",
 }
 `;
 
-exports[`run card renderer snapshots > collapses consecutive tools while preserving the latest running tool 2`] = `
+exports[`run card renderer snapshots > collapses every contiguous tool group, including the latest running tool 2`] = `
 {
   "body": {
     "elements": [
@@ -437,17 +405,12 @@ exports[`run card renderer snapshots > renders tool running, done, and error sta
     "elements": [
       {
         "border": {
-          "color": "grey",
+          "color": "blue",
           "corner_radius": "5px",
         },
         "elements": [
           {
-            "content": "**Command**
-\`\`\`bash
-pwd
-\`\`\`
-
-_运行中…_",
+            "content": "- ⏳ **Bash** — pwd",
             "tag": "markdown",
             "text_size": "notation",
           },
@@ -462,7 +425,7 @@ _运行中…_",
           "icon_expanded_angle": -180,
           "icon_position": "follow_text",
           "title": {
-            "content": "⏳ **Bash** — pwd",
+            "content": "☕ **1 个工具调用**",
             "tag": "markdown",
           },
           "vertical_align": "center",
@@ -510,20 +473,12 @@ exports[`run card renderer snapshots > renders tool running, done, and error sta
     "elements": [
       {
         "border": {
-          "color": "grey",
+          "color": "blue",
           "corner_radius": "5px",
         },
         "elements": [
           {
-            "content": "**Command**
-\`\`\`bash
-pwd
-\`\`\`
-
-**Output**
-\`\`\`
-/repo
-\`\`\`",
+            "content": "- ✅ **Bash** — pwd",
             "tag": "markdown",
             "text_size": "notation",
           },
@@ -538,7 +493,7 @@ pwd
           "icon_expanded_angle": -180,
           "icon_position": "follow_text",
           "title": {
-            "content": "✅ **Bash** — pwd",
+            "content": "☕ **1 个工具调用（已结束）**",
             "tag": "markdown",
           },
           "vertical_align": "center",
@@ -565,17 +520,12 @@ exports[`run card renderer snapshots > renders tool running, done, and error sta
     "elements": [
       {
         "border": {
-          "color": "red",
+          "color": "blue",
           "corner_radius": "5px",
         },
         "elements": [
           {
-            "content": "**File** \`/missing.ts\`
-
-**Error**
-\`\`\`
-ENOENT
-\`\`\`",
+            "content": "- ❌ **Read** — /missing.ts",
             "tag": "markdown",
             "text_size": "notation",
           },
@@ -590,7 +540,7 @@ ENOENT
           "icon_expanded_angle": -180,
           "icon_position": "follow_text",
           "title": {
-            "content": "❌ **Read** — /missing.ts",
+            "content": "☕ **1 个工具调用（已结束）**",
             "tag": "markdown",
           },
           "vertical_align": "center",

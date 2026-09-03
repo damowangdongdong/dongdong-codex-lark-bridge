@@ -303,7 +303,8 @@ describe('Codex resumed-history cards', () => {
       expect(outer.tag).toBe('collapsible_panel');
       expect(outer.expanded).toBe(false);
       expect(JSON.stringify(outer.header)).toContain('完整历史对话');
-      expect(JSON.stringify(outer.elements)).toContain('collapsible_panel');
+      expect(JSON.stringify(outer.elements)).not.toContain('collapsible_panel');
+      expect(JSON.stringify(outer.elements)).toContain('original question');
     }
   });
 

@@ -64,7 +64,7 @@ describe('run card renderer snapshots', () => {
     expect(toolPanel).toMatchObject({ expanded: false });
   });
 
-  it('collapses consecutive tools while preserving the latest running tool', () => {
+  it('collapses every contiguous tool group, including the latest running tool', () => {
     expectCard(stateFrom([
       { type: 'tool_use', id: 'tool-1', name: 'Bash', input: { command: 'pwd' } },
       { type: 'tool_result', id: 'tool-1', output: '/repo', isError: false },

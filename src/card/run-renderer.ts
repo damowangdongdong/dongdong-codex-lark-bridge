@@ -1,10 +1,8 @@
 import { deepMaskEmails } from './mask-email';
 import type { Block, FooterStatus, NoticeEntry, RunState, ToolEntry } from './run-state';
-import { toolBodyMd, toolHeaderText } from './tool-render';
+import { toolHeaderText } from './tool-render';
 
 const REASONING_MAX = 1500;
-const COLLAPSE_TOOL_THRESHOLD = 3;
-
 interface ToolGroup {
   kind: 'tools';
   tools: ToolEntry[];
@@ -175,20 +173,10 @@ function* groupBlocks(blocks: Block[]): Generator<Group> {
 
 function renderToolGroup(tools: ToolEntry[], finalized: boolean): object[] {
   if (tools.length === 0) return [];
-  if (tools.length < COLLAPSE_TOOL_THRESHOLD) {
-    return tools.map((t) => toolPanel(t, false));
-  }
-  if (finalized) {
-    return [collapsedToolSummary(tools, true)];
-  }
-  // Running: keep the latest tool visible, but collapsed like every other
-  // tool so a long command output never takes over the card by default.
-  const prior = tools.slice(0, -1);
-  const latest = tools[tools.length - 1];
-  const out: object[] = [];
-  if (prior.length > 0) out.push(collapsedToolSummary(prior, false));
-  if (latest) out.push(toolPanel(latest, false));
-  return out;
+  // Keep every contiguous tool run in one collapsed panel, including a
+  // single call. The summary still exposes each tool's name, status and
+  // short input while keeping command output out of the live card by default.
+  return [collapsedToolSummary(tools, finalized)];
 }
 
 function reasoningPanel(content: string, active: boolean): object {
@@ -223,27 +211,19 @@ function noticePanel(notice: NoticeEntry): object {
   });
 }
 
-function toolPanel(tool: ToolEntry, expanded: boolean): object {
-  return collapsiblePanel({
-    title: toolHeaderText(tool),
-    expanded,
-    border: tool.status === 'error' ? 'red' : 'grey',
-    body: toolBodyMd(tool) || '_无输出_',
-  });
-}
-
 /**
- * Render N completed tool calls as a compact live summary. The finalized card
- * expands them back into individual panels, and the post-run trace cards carry
- * every untruncated input/output chunk.
+ * Render a contiguous tool run as a compact summary. The post-run trace cards
+ * carry every untruncated input/output chunk when detailed inspection is
+ * needed.
  *
  * Why no bodies: with full input/output panels nested, the serialized JSON
  * can easily exceed Feishu's per-element size limit (~30KB), causing 400
  * errors that abort the entire card stream. Tool details are still in the
  * file log; users who really need them can `/doctor` to inspect.
  *
- * The latest-running tool, when applicable, is rendered separately so its
- * status remains visible without expanding its potentially large body.
+ * Running tools stay in the same summary panel as completed tools; their
+ * status icon changes to ⏳ so the active call remains visible without
+ * expanding its potentially large body.
  */
 function collapsedToolSummary(tools: ToolEntry[], finalized: boolean): object {
   const suffix = finalized ? '（已结束）' : '';
