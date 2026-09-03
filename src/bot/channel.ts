@@ -271,6 +271,12 @@ export async function startChannel(deps: StartChannelDeps): Promise<BridgeChanne
   };
 
   const channel = createLarkChannel(opts);
+  // Validate app-identity permissions before installing handlers or opening
+  // the websocket. A Codex profile must never briefly accept events with a
+  // permission set that cannot create/reuse its project groups.
+  if (agent.id === 'codex') {
+    await requireProjectChatScopes(channel, cfg.accounts.app.id);
+  }
   const media = new MediaCache(channel, deps.appPaths?.mediaDir);
 
   // Pending → run handoff: while a run is active on a chat, block its pending
@@ -485,14 +491,6 @@ export async function startChannel(deps: StartChannelDeps): Promise<BridgeChanne
   }
 
   await channel.connect();
-  if (agent.id === 'codex') {
-    try {
-      await requireProjectChatScopes(channel, cfg.accounts.app.id);
-    } catch (err) {
-      await channel.disconnect().catch(() => undefined);
-      throw err;
-    }
-  }
   const ownerRefresh = createOwnerRefreshController({
     controls,
     source: channel,
