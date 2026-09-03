@@ -13,7 +13,7 @@ const byMessageId = new Map<string, ManagedEntry>();
 
 export interface ManagedCardSendResult {
   messageId: string;
-  cardId: string;
+  cardId?: string;
 }
 
 /**
@@ -32,10 +32,20 @@ export async function sendManagedCard(
   card: object,
   opts: { replyTo?: string; replyInThread?: boolean } = {},
 ): Promise<ManagedCardSendResult> {
-  const { cardId } = await channel.createCard(card);
   const sendOpts = opts.replyTo
     ? { replyTo: opts.replyTo, ...(opts.replyInThread ? { replyInThread: true } : {}) }
     : undefined;
+  let cardId: string | undefined;
+  try {
+    ({ cardId } = await channel.createCard(card));
+  } catch (err) {
+    log.warn('card', 'managed-create-fallback', {
+      err: err instanceof Error ? err.message : String(err),
+    });
+    const { messageId } = await channel.send(recipientId, { card }, sendOpts);
+    byMessageId.set(messageId, { kind: 'raw-card', sequence: 0 });
+    return { messageId };
+  }
   let messageId: string;
   try {
     ({ messageId } = await channel.send(recipientId, { cardId }, sendOpts));

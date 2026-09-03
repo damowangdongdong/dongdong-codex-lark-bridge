@@ -4,7 +4,7 @@ import {
   codexSlashSurface,
 } from '../../../src/commands/codex-slash.js';
 
-const CODEX_0_151_COMMANDS = [
+const CODEX_COMPATIBLE_COMMANDS = [
   '/permissions',
   '/ide',
   '/keymap',
@@ -62,16 +62,20 @@ const CODEX_0_151_COMMANDS = [
 ];
 
 describe('Codex slash command registry', () => {
-  it('covers every Codex CLI 0.151 command and documented alias', () => {
+  it('covers the Codex CLI-compatible commands and documented aliases', () => {
     const registered = Object.keys(CODEX_SLASH_COMMANDS).filter(
-      (command) => command !== '/permission' && command !== '/profile',
+      (command) =>
+        command !== '/permission' && command !== '/profile' && command !== '/skill',
     );
-    expect(registered.sort()).toEqual([...CODEX_0_151_COMMANDS].sort());
+    expect(registered.sort()).toEqual([...CODEX_COMPATIBLE_COMMANDS].sort());
   });
 
   it('keeps the requested singular permissions alias and rejects unknown commands', () => {
     expect(codexSlashSurface('/permission')).toBe('bridge');
     expect(codexSlashSurface('/profile')).toBe('bridge');
+    expect(codexSlashSurface('/skill')).toBe('app-server');
+    expect(codexSlashSurface('/logout')).toBe('app-server');
+    expect(codexSlashSurface('/title')).toBe('app-server');
     expect(codexSlashSurface('/btw')).toBe('attached-tui');
     expect(codexSlashSurface('/clean')).toBe('app-server');
     expect(codexSlashSurface('/does-not-exist')).toBeUndefined();

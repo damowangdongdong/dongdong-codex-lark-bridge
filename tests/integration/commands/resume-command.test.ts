@@ -71,6 +71,7 @@ interface Harness {
     },
   ): Promise<void>;
   dispatchProfile(profile: string): Promise<void>;
+  dispatchSkillsPage(page: number): Promise<void>;
 }
 
 const cleanups: Array<() => Promise<void>> = [];
@@ -953,6 +954,17 @@ describe('agent-aware resume commands', () => {
       params: { threadId: 'thread-current', name: 'release prep' },
     });
 
+    await expect(h.run('/title release prep v2')).resolves.toBe(true);
+    expect(h.agent.appServerRequests.at(-1)).toMatchObject({
+      method: 'thread/name/set',
+      params: { threadId: 'thread-current', name: 'release prep v2' },
+    });
+
+    await expect(h.run('/logout')).resolves.toBe(true);
+    expect(h.agent.appServerRequests.at(-1)).toMatchObject({
+      method: 'account/logout',
+    });
+
     await expect(h.run('/goal finish tests')).resolves.toBe(true);
     expect(h.agent.appServerRequests.at(-1)).toMatchObject({
       method: 'thread/goal/set',
@@ -963,6 +975,139 @@ describe('agent-aware resume commands', () => {
     await expect(h.run('/personality pragmatic')).resolves.toBe(true);
     expect(h.workspaces.codexModelFor('chat-1')).toBe('gpt-test');
     expect(h.workspaces.codexPersonalityFor('chat-1')).toBe('pragmatic');
+
+    await expect(h.run('/skill research-pipeline analyze the target')).resolves.toBe(true);
+    expect(h.agent.appServerRequests.at(-1)).toMatchObject({
+      method: 'turn/start',
+      params: {
+        threadId: 'thread-current',
+        input: [{ text: '$research-pipeline analyze the target' }],
+      },
+    });
+  });
+
+  it('starts a new Codex thread when /skill invokes a skill first', async () => {
+    const h = await createHarness('codex');
+    h.agent.setAppServerResponse('thread/start', {
+      thread: { id: 'thread-skill' },
+    });
+
+    await expect(h.run('/skill research-pipeline')).resolves.toBe(true);
+
+    expect(h.agent.appServerRequests.map((request) => request.method)).toEqual([
+      'thread/start',
+      'turn/start',
+    ]);
+    expect(h.agent.appServerRequests.at(-1)).toMatchObject({
+      method: 'turn/start',
+      params: {
+        threadId: 'thread-skill',
+        input: [{ text: '$research-pipeline' }],
+      },
+    });
+    expect(h.catalog.activeFor(h.identity)).toMatchObject({ threadId: 'thread-skill' });
+    expect(h.workspaces.selectionFor('chat-1')).toMatchObject({ launchMode: 'new' });
+  });
+
+  it('renders the Codex skill catalog as a readable grouped list', async () => {
+    const h = await createHarness('codex');
+    h.agent.setAppServerResponse('skills/list', {
+      data: [{
+        cwd: h.tmp.workspace,
+        errors: [{ message: 'ignored malformed skill' }],
+        skills: [
+          {
+            name: 'research-pipeline',
+            description: 'Long fallback description',
+            enabled: true,
+            path: `${h.tmp.workspace}/SKILL.md`,
+            scope: 'user',
+            interface: {
+              displayName: 'Research Pipeline',
+              shortDescription: 'End-to-end research workflow',
+            },
+          },
+          {
+            name: 'disabled-skill',
+            shortDescription: 'Unavailable workflow',
+            enabled: false,
+            path: `${h.tmp.workspace}/disabled/SKILL.md`,
+            scope: 'system',
+          },
+          ...Array.from({ length: 5 }, (_, index) => ({
+            name: `z-extra-${index + 1}`,
+            shortDescription: `Extra workflow ${index + 1}`,
+            enabled: true,
+            path: `${h.tmp.workspace}/z-extra-${index + 1}/SKILL.md`,
+            scope: 'user',
+          })),
+        ],
+      }],
+    });
+
+    await expect(h.run('/skill')).resolves.toBe(true);
+
+    const cardJson = lastContentString(h.channel);
+    expect(cardJson).toContain('Codex Skills');
+    expect(cardJson).toContain('第 **1 / 2** 页');
+    expect(cardJson).toContain('$research-pipeline');
+    expect(cardJson).toContain('Research Pipeline');
+    expect(cardJson).toContain('End-to-end research workflow');
+    expect(cardJson).toContain('已启用');
+    expect(cardJson).toContain('$disabled-skill');
+    expect(cardJson).toContain('已停用');
+    expect(cardJson).toContain(`${h.tmp.workspace}/SKILL.md`);
+    expect(cardJson).toContain('扫描错误');
+    expect(cardJson).toContain('ignored malformed skill');
+
+    const pageArgs: string[] = [];
+    walkCard(lastContent(h.channel), (action) => {
+      if (action?.cmd === 'codex.skills.page' && typeof action.arg === 'string') pageArgs.push(action.arg);
+    });
+    expect(pageArgs).toEqual(['2']);
+
+    await h.dispatchSkillsPage(2);
+    const update = h.channel.rawClient.requests.at(-1);
+    expect(update?.method).toBe('cardkit.v1.card.update');
+    expect(JSON.stringify(update?.params)).toContain('第 **2 / 2** 页');
+    expect(JSON.stringify(update?.params)).toContain('$z-extra-5');
+    expect(JSON.stringify(update?.params)).not.toContain('$research-pipeline');
+
+    await expect(h.run('/skills')).resolves.toBe(true);
+    expect(lastContentString(h.channel)).toContain('$research-pipeline');
+  });
+
+  it('starts and binds a new Codex thread when /goal is the first command', async () => {
+    const h = await createHarness('codex');
+    h.agent.setAppServerResponse('thread/start', {
+      thread: { id: 'thread-goal' },
+    });
+
+    await expect(h.run('/goal reproduce the harness')).resolves.toBe(true);
+
+    expect(h.agent.appServerRequests.map((request) => request.method)).toEqual([
+      'thread/start',
+      'thread/goal/set',
+      'turn/start',
+    ]);
+    expect(h.agent.appServerRequests[1]).toMatchObject({
+      method: 'thread/goal/set',
+      params: {
+        threadId: 'thread-goal',
+        objective: 'reproduce the harness',
+        status: 'active',
+      },
+    });
+    expect(h.agent.appServerRequests[2]).toMatchObject({
+      method: 'turn/start',
+      params: {
+        threadId: 'thread-goal',
+        input: [{ text: '请开始执行当前 goal。' }],
+      },
+    });
+    expect(h.catalog.activeFor(h.identity)).toMatchObject({ threadId: 'thread-goal' });
+    expect(h.workspaces.selectionFor('chat-1')).toMatchObject({ launchMode: 'new' });
+    expect(lastMarkdown(h.channel)).toContain('开始执行当前 goal');
   });
 
   it('maps the remaining app-server-backed Codex commands and aliases', async () => {
@@ -1304,6 +1449,27 @@ async function createHarness(
     });
   };
 
+  const dispatchSkillsPage = (page: number): Promise<void> => {
+    cardModes.set('chat-1', 'p2p');
+    return handleCardAction({
+      channel: channel as unknown as Parameters<typeof handleCardAction>[0]['channel'],
+      evt: cardEvent({ cmd: 'codex.skills.page', arg: String(page) }, undefined, 'chat-1', 'om_fake_1'),
+      sessions,
+      sessionCatalog: catalog,
+      workspaces,
+      activeRuns,
+      agent,
+      controls,
+      pending,
+      chatModeCache,
+      codexHistoryProvider: async (options) => {
+        codexHistoryRequests.push(options);
+        return codexHistory;
+      },
+      claudeHistoryProvider: async () => claudeHistory,
+    });
+  };
+
   cleanups.push(async () => {
     pending.cancelAll();
     await Promise.all([sessions.flush(), workspaces.flush(), catalog.flush()]);
@@ -1330,6 +1496,7 @@ async function createHarness(
     dispatchTakeoverArg,
     dispatchLaunch,
     dispatchProfile,
+    dispatchSkillsPage,
   };
 }
 
@@ -1411,11 +1578,12 @@ function cardEvent(
   value: Record<string, unknown>,
   formValue?: Record<string, unknown>,
   chatId = 'chat-1',
+  messageId = 'om-card',
 ): CardActionEvent {
   return {
     action: { value },
     chatId,
-    messageId: 'om-card',
+    messageId,
     operator: {
       openId: 'ou-user',
       name: 'User',

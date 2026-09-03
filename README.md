@@ -162,7 +162,7 @@ If a profile was created with the wrong agent kind, stop or unregister any match
 | `/ps` | With Codex, list background terminals for the current thread |
 | `/ps bridge` | List local bridge processes |
 | `/delete`, `/delete confirm` | Preview, then permanently delete the current Codex thread and its child threads |
-| `/codex commands` | Show the complete Codex 0.151 slash-command inventory and where each command runs |
+| `/codex commands` | Show the complete Codex 0.152.x-compatible slash-command inventory and where each command runs |
 | `/exit <id\|#>` | Stop a bridge process |
 | `/reconnect` | Force a WebSocket reconnect |
 | `/doctor [description]` | Run low-sensitive diagnostics |
@@ -176,12 +176,18 @@ Codex uses one persistent `codex app-server` per selected Codex CLI profile. In 
 
 While a Codex turn is running, use **↵ Insert now** to steer the active turn (Enter semantics), or **⇥ Queue** to run the instruction after it completes (Tab semantics). `/attach` prints `codex [--profile <name>] --remote <endpoint> resume <thread-id>` and includes the selected profile when one is active; input entered in that attached terminal and its resulting progress/final answer are mirrored back to Feishu. Feishu-originated turns use the same app-server and thread.
 
-The bridge covers the complete Codex CLI 0.151 slash-command inventory. `/codex commands` prints this inventory in Feishu. The execution surfaces are:
+In a scope with no Codex thread yet, send `/goal <objective>` directly. The bridge creates a new conversation, stores the persistent goal, and starts the first turn, matching the Codex CLI new-chat flow. The scope must have a working directory; send `/cd <absolute-path>` first when it does not, or configure `workspaces.default` in the profile. Example:
+
+`/goal Use the $research-pipeline skill to analyze the reproduction target, required models and resources, then produce an executable experiment plan.`
+
+When a thread already exists, `/goal <objective>` only updates that thread's persistent goal. Use `/goal` to inspect it, `/goal pause` or `/goal resume` to change its status, and `/goal clear` to remove it.
+
+The bridge covers the Codex CLI 0.152.x-compatible slash-command inventory. `/codex commands` prints this inventory in Feishu. The execution surfaces are:
 
 - Bridge-native: `/permissions`, `/permission`, `/clear`, `/resume`, `/new`, `/status`.
-- App-server: `/apps`, `/plugins`, `/hooks`, `/rename`, `/archive`, `/delete`, `/compact`, `/experimental`, `/memories`, `/skills`, `/mcp`, `/model`, `/fast`, `/plan`, `/goal`, `/personality`, `/clean`, `/fork`, `/review`, `/usage`, `/debug-config`.
+- App-server: `/apps`, `/plugins`, `/hooks`, `/rename`, `/title`, `/archive`, `/delete`, `/compact`, `/experimental`, `/memories`, `/skill`, `/skills`, `/mcp`, `/model`, `/fast`, `/plan`, `/goal`, `/personality`, `/clean`, `/fork`, `/review`, `/usage`, `/debug-config`, `/logout`. `/skill` without arguments shows the skills in a paginated card with previous/next controls; `/skill <name> [instruction]` invokes `$name` in the current Codex thread and starts a thread automatically when needed.
 - Hybrid bridge controls: `/ps`, `/stop`, `/exit`. In a Codex bot, `/ps` means Codex background terminals and `/ps bridge` means local bridge processes; `/stop` interrupts an active turn, while `/stop terminals` and `/clean` stop the thread's background terminals. `/delete` requires the explicit `/delete confirm` form before permanent deletion.
-- Attached-TUI commands: `/ide`, `/keymap`, `/vim`, `/setup-default-sandbox`, `/sandbox-add-read-dir`, `/agent`, `/subagents`, `/copy`, `/diff`, `/approve`, `/import`, `/feedback`, `/init`, `/logout`, `/mention`, `/app`, `/side`, `/btw`, `/raw`, `/quit`, `/statusline`, `/title`, `/theme`, `/pets`, `/pet`. The bridge responds with the exact `/attach` instruction because these commands depend on terminal-local UI state.
+- Attached-TUI commands: `/ide`, `/keymap`, `/vim`, `/setup-default-sandbox`, `/sandbox-add-read-dir`, `/agent`, `/subagents`, `/copy`, `/diff`, `/approve`, `/import`, `/feedback`, `/init`, `/mention`, `/app`, `/side`, `/btw`, `/raw`, `/quit`, `/statusline`, `/theme`, `/pets`, `/pet`. The bridge responds with the exact `/attach` instruction because these commands depend on terminal-local UI state.
 
 Unknown slash commands are consumed as commands and are never sent to the model as prompts.
 

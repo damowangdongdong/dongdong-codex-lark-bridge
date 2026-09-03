@@ -58,6 +58,7 @@ describe('Codex workspace launch cards', () => {
       input_type: 'text',
       disabled: true,
     }));
+    expect(actions(card)).toContainEqual({ cmd: 'resume.copy', arg: threadId });
     expect(actions(card)).toContainEqual({ cmd: 'ws.new' });
   });
 

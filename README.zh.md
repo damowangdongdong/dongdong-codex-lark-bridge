@@ -160,7 +160,7 @@ lark-channel-bridge profile export <name> --include-secrets --yes
 | `/ps` | Codex 下列出当前 thread 的后台终端 |
 | `/ps bridge` | 列出本机 bridge 进程 |
 | `/delete`, `/delete confirm` | 先预览，再永久删除当前 Codex thread 及其子会话 |
-| `/codex commands` | 显示 Codex 0.151 全部斜杠命令及各自的执行位置 |
+| `/codex commands` | 显示 Codex 0.152.x 兼容的全部斜杠命令及各自的执行位置 |
 | `/exit <id\|#>` | 停止指定 bridge 进程 |
 | `/reconnect` | 强制 WebSocket 重连 |
 | `/doctor [描述]` | 执行低敏诊断 |
@@ -174,12 +174,18 @@ Codex 按所选 Codex CLI profile 各自复用一个常驻 `codex app-server`。
 
 Codex turn 运行时，点击 **↵ 立即插入** 会 steer 当前 turn（对应 Enter），点击 **⇥ 排队** 会在当前 turn 完成后执行（对应 Tab）。`/attach` 会输出 `codex --remote <endpoint> resume <thread-id>`；在附着终端中输入的内容、运行过程和最终答案会同步回飞书。飞书发起的 turn 也复用同一个 app-server 和 thread。
 
-bridge 覆盖 Codex CLI 0.151 的全部斜杠命令；发送 `/codex commands` 可以在飞书中查看完整清单。执行方式分为：
+在尚未创建 Codex thread 的新 scope 中，可以直接发送 `/goal <目标>`：bridge 会自动创建新对话、写入持久 goal，并启动首轮 turn，行为与 Codex CLI 的新对话入口一致。当前 scope 必须已有工作目录；未设置时先发送 `/cd <绝对路径>`，或在 profile 中配置 `workspaces.default`。例如：
+
+`/goal 使用 $research-pipeline skill，先分析复现目标、所需模型与资源，再给出可执行的实验计划。`
+
+已有 thread 时，`/goal <目标>` 只更新该 thread 的持久 goal；`/goal` 查看目标，`/goal pause`、`/goal resume` 控制状态，`/goal clear` 清除目标。
+
+bridge 覆盖 Codex CLI 0.152.x 兼容的斜杠命令；发送 `/codex commands` 可以在飞书中查看完整清单。执行方式分为：
 
 - 飞书原生：`/permissions`、`/permission`、`/clear`、`/resume`、`/new`、`/status`。
-- app-server：`/apps`、`/plugins`、`/hooks`、`/rename`、`/archive`、`/delete`、`/compact`、`/experimental`、`/memories`、`/skills`、`/mcp`、`/model`、`/fast`、`/plan`、`/goal`、`/personality`、`/clean`、`/fork`、`/review`、`/usage`、`/debug-config`。
+- app-server：`/apps`、`/plugins`、`/hooks`、`/rename`、`/title`、`/archive`、`/delete`、`/compact`、`/experimental`、`/memories`、`/skill`、`/skills`、`/mcp`、`/model`、`/fast`、`/plan`、`/goal`、`/personality`、`/clean`、`/fork`、`/review`、`/usage`、`/debug-config`、`/logout`。`/skill` 不带参数时以分页卡片列出技能，可用上一页/下一页切换；`/skill <名称> [指令]` 会在当前 Codex thread 中调用 `$名称`；没有 thread 时会自动新建并绑定会话。
 - bridge 双重控制：`/ps`、`/stop`、`/exit`。在 Codex bot 中，`/ps` 表示后台终端，`/ps bridge` 才表示本机 bridge 进程；`/stop` 优先中断活动 turn，`/stop terminals` 和 `/clean` 停止 thread 的后台终端；永久删除必须显式发送 `/delete confirm`。
-- 附着 TUI：`/ide`、`/keymap`、`/vim`、`/setup-default-sandbox`、`/sandbox-add-read-dir`、`/agent`、`/subagents`、`/copy`、`/diff`、`/approve`、`/import`、`/feedback`、`/init`、`/logout`、`/mention`、`/app`、`/side`、`/btw`、`/raw`、`/quit`、`/statusline`、`/title`、`/theme`、`/pets`、`/pet`。这些命令依赖终端本地 UI 状态，因此 bridge 会返回准确的 `/attach` 指引。
+- 附着 TUI：`/ide`、`/keymap`、`/vim`、`/setup-default-sandbox`、`/sandbox-add-read-dir`、`/agent`、`/subagents`、`/copy`、`/diff`、`/approve`、`/import`、`/feedback`、`/init`、`/mention`、`/app`、`/side`、`/btw`、`/raw`、`/quit`、`/statusline`、`/theme`、`/pets`、`/pet`。这些命令依赖终端本地 UI 状态，因此 bridge 会返回准确的 `/attach` 指引。
 
 未知斜杠命令会作为命令被拦截，不会误发给模型当作 prompt。
 

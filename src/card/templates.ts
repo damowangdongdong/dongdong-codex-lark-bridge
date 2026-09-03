@@ -344,6 +344,80 @@ export function permissionsCard(input: {
   ]);
 }
 
+export interface CodexSkillCardEntry {
+  cwd: string;
+  name: string;
+  displayName?: string;
+  description?: string;
+  scope?: string;
+  enabled?: boolean;
+  path?: string;
+}
+
+export interface CodexSkillsCardOptions {
+  entries: CodexSkillCardEntry[];
+  errors?: string[];
+  page: number;
+  pageCount: number;
+  total: number;
+}
+
+export function codexSkillsCard(options: CodexSkillsCardOptions): object {
+  const elements: object[] = [
+    divMd(`共 **${options.total}** 个技能 · 第 **${options.page} / ${options.pageCount}** 页`),
+  ];
+
+  if (options.entries.length === 0) {
+    elements.push(HR, divMd('未发现可用技能。'));
+  } else {
+    const groups = new Map<string, CodexSkillCardEntry[]>();
+    for (const entry of options.entries) {
+      const group = groups.get(entry.cwd) ?? [];
+      group.push(entry);
+      groups.set(entry.cwd, group);
+    }
+    elements.push(HR);
+    let groupIndex = 0;
+    for (const [cwd, entries] of groups) {
+      const lines = [`**工作区**：\`${escapeCode(cwd)}\``];
+      for (const entry of entries) {
+        const displayName = entry.displayName && entry.displayName !== entry.name
+          ? ` · **${escapeMd(entry.displayName)}**`
+          : '';
+        const scope = entry.scope ? escapeMd(entry.scope) : '未标注范围';
+        const status = entry.enabled === true
+          ? '已启用'
+          : entry.enabled === false
+            ? '已停用'
+            : '状态未知';
+        lines.push(
+          `- \`$${escapeCode(entry.name)}\`${displayName} · ${scope} · ${status}`,
+          ...(entry.description ? [`  ${escapeMd(entry.description)}`] : []),
+          ...(entry.path ? [`  来源：\`${escapeCode(entry.path)}\``] : []),
+        );
+      }
+      elements.push(divMd(lines.join('\n')));
+      groupIndex += 1;
+      if (groupIndex < groups.size) elements.push(HR);
+    }
+  }
+
+  if (options.errors?.length) {
+    elements.push(HR, divMd(['**扫描错误**', ...options.errors.map((error) => `- ${escapeMd(error)}`)].join('\n')));
+  }
+
+  const pageActions: ButtonSpec[] = [];
+  if (options.page > 1) {
+    pageActions.push({ text: '上一页', value: { cmd: 'codex.skills.page', arg: String(options.page - 1) } });
+  }
+  if (options.page < options.pageCount) {
+    pageActions.push({ text: '下一页', value: { cmd: 'codex.skills.page', arg: String(options.page + 1) }, style: 'primary' });
+  }
+  if (pageActions.length) elements.push(HR, actions(pageActions));
+
+  return shell('🧩 Codex Skills', elements);
+}
+
 export interface ResumeEntry {
   sessionId: string;
   displayId?: string;
@@ -404,6 +478,13 @@ export function resumeCard(
             default_value: displayId,
             input_type: 'text',
             disabled: true,
+          },
+          {
+            tag: 'button',
+            name: `copy_codex_thread_id_${i + 1}`,
+            text: { tag: 'plain_text', content: '复制 ID' },
+            form_action_type: 'submit',
+            behaviors: [{ type: 'callback', value: { cmd: 'resume.copy', arg: displayId } }],
           },
         ],
       });

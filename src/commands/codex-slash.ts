@@ -1,7 +1,7 @@
 export type CodexSlashSurface = 'bridge' | 'app-server' | 'attached-tui' | 'hybrid';
 
 /**
- * Codex CLI 0.151 slash-command inventory.
+ * Codex CLI slash-command inventory (kept compatible with Codex 0.152.x).
  *
  * `bridge` commands have a native Feishu interaction, `app-server` commands
  * map to a Codex RPC, `attached-tui` commands depend on terminal-local UI
@@ -32,10 +32,12 @@ export const CODEX_SLASH_COMMANDS = {
   '/approve': 'attached-tui',
   '/memories': 'app-server',
   '/skills': 'app-server',
+  // Singular spelling used by some Codex CLI builds and common muscle memory.
+  '/skill': 'app-server',
   '/import': 'attached-tui',
   '/feedback': 'attached-tui',
   '/init': 'attached-tui',
-  '/logout': 'attached-tui',
+  '/logout': 'app-server',
   '/mcp': 'app-server',
   '/mention': 'attached-tui',
   '/model': 'app-server',
@@ -61,7 +63,7 @@ export const CODEX_SLASH_COMMANDS = {
   '/usage': 'app-server',
   '/debug-config': 'app-server',
   '/statusline': 'attached-tui',
-  '/title': 'attached-tui',
+  '/title': 'app-server',
   '/theme': 'attached-tui',
   '/pets': 'attached-tui',
   '/pet': 'attached-tui',

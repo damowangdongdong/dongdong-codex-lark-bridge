@@ -26,6 +26,7 @@ import { GROUP_MSG_SCOPE, hasGroupMsgScope } from '../bot/app-scope';
 import { requestScopeGrantLink } from '../bot/wizard';
 import { forgetManagedCard, sendManagedCard, updateManagedCard } from '../card/managed';
 import {
+  codexSkillsCard,
   helpCard,
   codexProfileCard,
   permissionsCard,
@@ -243,6 +244,7 @@ const ADMIN_COMMANDS = new Set([
   '/permissions',
   '/permission',
   '/profile',
+  '/logout',
   '/debug-config',
   '/experimental',
   '/delete',
@@ -396,6 +398,12 @@ async function handleNew(args: string, ctx: CommandContext): Promise<void> {
 async function handleCodexControl(args: string, ctx: CommandContext): Promise<void> {
   if (ctx.agent.id !== 'codex') return;
   const action = args.trim();
+  const skillsPage = action.match(/^skills(?:[ .])page(?:\s+(\d+))?$/);
+  if (skillsPage) {
+    const requestedPage = Number(skillsPage[1] ?? '1');
+    await handleCodexSkillsList(ctx, Number.isInteger(requestedPage) && requestedPage > 0 ? requestedPage : 1);
+    return;
+  }
   if (action === 'commands' || action === 'help') {
     const groups = Object.entries(CODEX_SLASH_COMMANDS).reduce<Record<string, string[]>>(
       (result, [command, surface]) => {
@@ -407,7 +415,7 @@ async function handleCodexControl(args: string, ctx: CommandContext): Promise<vo
     await reply(
       ctx,
       [
-        '**Codex 0.151 命令覆盖**',
+        '**Codex 0.152.x 命令覆盖**',
         '',
         `- 飞书原生：${groups.bridge?.map((command) => `\`${command}\``).join(' ')}`,
         `- app-server：${groups['app-server']?.map((command) => `\`${command}\``).join(' ')}`,
@@ -606,7 +614,11 @@ async function handleCodexSlash(cmd: string, args: string, ctx: CommandContext):
     case '/plan':
       return handleCodexPlan(args, ctx);
     case '/rename':
-      return handleThreadRpc(ctx, 'thread/name/set', args, (threadId) => ({ threadId, name: args.trim() }), '会话已重命名', true);
+      return handleThreadRpc(ctx, 'thread/name/set', args, (threadId) => ({ threadId, name: args.trim() }), '会话已重命名', true, '/rename <name>');
+    case '/title':
+      return handleThreadRpc(ctx, 'thread/name/set', args, (threadId) => ({ threadId, name: args.trim() }), '会话已重命名', true, '/title <name>');
+    case '/logout':
+      return handleCodexLogout(ctx);
     case '/archive':
       return handleCodexArchive(ctx);
     case '/delete':
@@ -651,7 +663,9 @@ async function handleCodexSlash(cmd: string, args: string, ctx: CommandContext):
       );
     }
     case '/skills':
-      return handleGlobalRpc(ctx, 'skills/list', { cwds: [effectiveWorkspaceCwd(ctx)].filter(Boolean), forceReload: false }, 'Skills');
+      return handleCodexSkillsList(ctx);
+    case '/skill':
+      return handleCodexSkill(args, ctx);
     case '/apps': {
       const remote = await codexRemoteContext(ctx);
       return handleGlobalRpc(ctx, 'app/list', { threadId: remote.threadId, limit: 100, forceRefetch: false }, 'Apps');
@@ -841,9 +855,22 @@ async function handleCodexFork(ctx: CommandContext): Promise<void> {
 }
 
 async function handleCodexGoal(args: string, ctx: CommandContext): Promise<void> {
-  const remote = await codexRemoteContext(ctx);
-  if (!remote.threadId) return reply(ctx, '当前 scope 没有 Codex thread。');
   const value = args.trim();
+  const setsObjective = Boolean(
+    value
+    && value !== 'clear'
+    && value !== 'pause'
+    && value !== 'resume'
+  );
+  let createdNewThread = false;
+  let remote = await codexRemoteContext(ctx);
+  if (!remote.threadId && setsObjective) {
+    const started = await startCodexThread(ctx);
+    if (!started) return;
+    remote = { ...remote, threadId: started.threadId };
+    createdNewThread = true;
+  }
+  if (!remote.threadId) return reply(ctx, '当前 scope 没有 Codex thread。');
   if (!value) {
     const result = await codexRpc(ctx, 'thread/goal/get', { threadId: remote.threadId });
     await reply(ctx, formatRpcResult('当前 goal', result));
@@ -864,7 +891,224 @@ async function handleCodexGoal(args: string, ctx: CommandContext): Promise<void>
   }
   const objective = value.startsWith('edit ') ? value.slice(5).trim() : value;
   await codexRpc(ctx, 'thread/goal/set', { threadId: remote.threadId, objective, status: 'active' });
+  if (createdNewThread) {
+    await codexRpc(ctx, 'turn/start', codexTurnStartParams(ctx, remote.threadId, '请开始执行当前 goal。'));
+    await reply(ctx, '✓ 已创建新的 Codex 对话并开始执行当前 goal。');
+    return;
+  }
   await reply(ctx, '✓ 当前 goal 已更新。');
+}
+
+async function handleCodexSkill(args: string, ctx: CommandContext): Promise<void> {
+  const value = args.trim();
+  if (!value) {
+    await handleCodexSkillsList(ctx);
+    return;
+  }
+
+  const [rawName, ...rest] = value.split(/\s+/);
+  const name = rawName?.startsWith('$') ? rawName.slice(1) : rawName;
+  if (!name || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(name)) {
+    await reply(ctx, '用法：`/skill <skill-name> [指令]`；查看技能请发送 `/skills`。');
+    return;
+  }
+  if (ctx.activeRuns.get(ctx.scope)) {
+    await reply(ctx, '当前 turn 运行中，请等待完成后再调用 skill。');
+    return;
+  }
+
+  const remote = await codexRemoteContext(ctx);
+  let threadId = remote.threadId;
+  if (!threadId) {
+    const started = await startCodexThread(ctx);
+    if (!started) return;
+    threadId = started.threadId;
+  }
+  const prompt = `$${name}${rest.length ? ` ${rest.join(' ')}` : ''}`;
+  await codexRpc(ctx, 'turn/start', codexTurnStartParams(ctx, threadId, prompt));
+  await reply(ctx, `✓ 已调用 skill **${name}**${rest.length ? ' 并开始执行指令' : ''}。`);
+}
+
+const CODEX_SKILLS_PAGE_SIZE = 6;
+
+interface CodexSkillCatalogEntry {
+  cwd: string;
+  name: string;
+  displayName?: string;
+  description?: string;
+  scope?: string;
+  enabled?: boolean;
+  path?: string;
+}
+
+interface CodexSkillCatalog {
+  entries: CodexSkillCatalogEntry[];
+  errors: string[];
+}
+
+async function handleCodexSkillsList(ctx: CommandContext, requestedPage = 1): Promise<void> {
+  const result = await codexRpc(ctx, 'skills/list', {
+    cwds: [effectiveWorkspaceCwd(ctx)].filter(Boolean),
+    forceReload: false,
+  });
+  const catalog = parseCodexSkills(result);
+  const pageCount = Math.max(1, Math.ceil(catalog.entries.length / CODEX_SKILLS_PAGE_SIZE));
+  const page = Math.min(Math.max(requestedPage, 1), pageCount);
+  const start = (page - 1) * CODEX_SKILLS_PAGE_SIZE;
+  const card = codexSkillsCard({
+    entries: catalog.entries.slice(start, start + CODEX_SKILLS_PAGE_SIZE),
+    errors: page === 1 ? catalog.errors : [],
+    page,
+    pageCount,
+    total: catalog.entries.length,
+  });
+
+  if (ctx.fromCardAction) {
+    try {
+      await updateManagedCard(ctx.channel, ctx.msg.messageId, card);
+      return;
+    } catch (err) {
+      log.warn('command', 'skills-card-update-fallback', {
+        messageId: ctx.msg.messageId,
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+  await sendManagedCard(ctx.channel, ctx.msg.chatId, card, commandReplyOptions(ctx));
+}
+
+function parseCodexSkills(result: unknown): CodexSkillCatalog {
+  const groups = resultData(result)
+    .map(recordValue)
+    .filter((entry): entry is Record<string, unknown> => Boolean(entry));
+  const entries: CodexSkillCatalogEntry[] = [];
+  const errors: string[] = [];
+
+  for (const group of groups) {
+    const cwd = stringValue(group.cwd) ?? '未指定工作区';
+    const skills = Array.isArray(group.skills)
+      ? group.skills
+        .map(recordValue)
+        .filter((entry): entry is Record<string, unknown> => Boolean(entry))
+      : [];
+    skills.sort((a, b) => {
+      const aName = stringValue(a.name) ?? stringValue(a.id) ?? '';
+      const bName = stringValue(b.name) ?? stringValue(b.id) ?? '';
+      return aName.localeCompare(bName);
+    });
+    for (const skill of skills) {
+      const name = stringValue(skill.name) ?? stringValue(skill.id) ?? '未命名技能';
+      const iface = recordValue(skill.interface);
+      const displayName = stringValue(iface?.displayName);
+      const description = compactSkillText(
+        iface?.shortDescription ?? skill.shortDescription ?? skill.description,
+      );
+      entries.push({
+        cwd,
+        name,
+        ...(displayName ? { displayName } : {}),
+        ...(description ? { description } : {}),
+        ...(stringValue(skill.scope) ? { scope: stringValue(skill.scope) } : {}),
+        ...(typeof skill.enabled === 'boolean' ? { enabled: skill.enabled } : {}),
+        ...(stringValue(skill.path) ? { path: stringValue(skill.path) } : {}),
+      });
+    }
+
+    if (Array.isArray(group.errors)) {
+      for (const error of group.errors) {
+        const detail = formatCodexSkillError(error);
+        if (detail) errors.push(`${cwd}：${detail}`);
+      }
+    }
+  }
+
+  return { entries, errors };
+}
+
+function formatCodexSkillError(error: unknown): string {
+  if (typeof error === 'string') return compactSkillText(error);
+  const record = recordValue(error);
+  if (record) {
+    const message = record.message ?? record.error ?? record.detail;
+    if (message !== undefined) return compactSkillText(message);
+    try {
+      return compactSkillText(JSON.stringify(record));
+    } catch {
+      return '';
+    }
+  }
+  return compactSkillText(error);
+}
+
+function compactSkillText(value: unknown, maxLength = 320): string {
+  if (value === undefined || value === null) return '';
+  const text = typeof value === 'string' ? value : JSON.stringify(value);
+  if (!text) return '';
+  const compact = text.replace(/\s+/g, ' ').trim();
+  return compact.length > maxLength ? `${compact.slice(0, maxLength - 1)}…` : compact;
+}
+
+async function handleCodexLogout(ctx: CommandContext): Promise<void> {
+  if (ctx.activeRuns.get(ctx.scope)) {
+    await reply(ctx, '当前 turn 运行中，请先终止或等待完成后再退出 Codex 账号。');
+    return;
+  }
+  await codexRpc(ctx, 'account/logout');
+  await reply(ctx, '✓ 已退出 Codex 账号。');
+}
+
+async function startCodexThread(
+  ctx: CommandContext,
+): Promise<{ threadId: string } | undefined> {
+  const cwd = await requireCodexWorkspace(ctx);
+  if (!cwd) return undefined;
+  const profile = ctx.workspaces.codexProfileFor(
+    ctx.scope,
+    ctx.controls.profileConfig.codex?.profile,
+  );
+
+  // A direct app-server slash command starts a fresh conversation even when
+  // the scope was waiting for the workspace launch card. Persist that choice
+  // before the thread is created so later turns resume the same thread.
+  ctx.workspaces.setCodexLaunch(ctx.scope, profile ?? null, 'new');
+
+  const result = await codexRpc(ctx, 'thread/start', await codexThreadParams(ctx, cwd));
+  const threadId = stringValue(recordValue(recordValue(result)?.thread)?.id);
+  if (!threadId) {
+    await reply(ctx, 'Codex 未返回新 thread，无法启动新对话。请稍后重试。');
+    return undefined;
+  }
+  const identity = await currentSessionCatalogIdentity(ctx, cwd);
+  if (!identity) {
+    await reply(ctx, '当前工作目录或权限策略不允许启动 Codex 对话。');
+    return undefined;
+  }
+  ctx.sessionCatalog?.upsertActive({ ...identity, threadId, now: Date.now() });
+  bindCodexThread(ctx, threadId, cwd, identity.policyFingerprint);
+  return { threadId };
+}
+
+function codexTurnStartParams(
+  ctx: CommandContext,
+  threadId: string,
+  text: string,
+): Record<string, unknown> {
+  const cwd = effectiveWorkspaceCwd(ctx);
+  if (!cwd) throw new Error('当前 Codex thread 没有关联工作目录');
+  const model = ctx.workspaces.codexModelFor(
+    ctx.scope,
+    resolveModelArg('codex', ctx.controls.profileConfig.preferences.model),
+  );
+  const personality = ctx.workspaces.codexPersonalityFor(ctx.scope);
+  return {
+    threadId,
+    input: [{ type: 'text', text, text_elements: [] }],
+    cwd,
+    approvalPolicy: 'never',
+    sandboxPolicy: codexSandboxPolicy(effectiveCodexSandbox(ctx), cwd),
+    ...(model ? { model } : {}),
+    ...(personality ? { personality } : {}),
+  };
 }
 
 async function handleCodexDebugConfig(ctx: CommandContext): Promise<void> {
@@ -951,9 +1195,10 @@ async function handleThreadRpc(
   params: (threadId: string) => Record<string, unknown>,
   success: string,
   requireArgs = false,
+  usage = `/${method}`,
 ): Promise<void> {
   if (requireArgs && !args.trim()) {
-    await reply(ctx, `用法：\`${method === 'thread/name/set' ? '/rename <name>' : `/${method}`}\``);
+    await reply(ctx, `用法：\`${usage}\``);
     return;
   }
   const remote = await codexRemoteContext(ctx);
@@ -1815,6 +2060,10 @@ async function handleResume(args: string, ctx: CommandContext): Promise<void> {
     }
     return applyResumeTakeover(rest, ctx);
   }
+  if (sub === 'copy' && rest) {
+    await reply(ctx, `Codex thread ID：\`${rest}\``);
+    return;
+  }
 
   // Default: list recent sessions
   const n = Number.parseInt(sub, 10);
@@ -2033,6 +2282,16 @@ async function codexResumeParams(
   threadId: string,
   cwd: string,
 ): Promise<Record<string, unknown>> {
+  return {
+    threadId,
+    ...(await codexThreadParams(ctx, cwd)),
+  };
+}
+
+async function codexThreadParams(
+  ctx: CommandContext,
+  cwd: string,
+): Promise<Record<string, unknown>> {
   const codex = ctx.controls.profileConfig.codex;
   const profile = ctx.workspaces.codexProfileFor(ctx.scope, codex?.profile);
   const model = ctx.workspaces.codexModelFor(
@@ -2052,7 +2311,6 @@ async function codexResumeParams(
       })
     : undefined;
   return {
-    threadId,
     cwd,
     approvalPolicy: 'never',
     sandbox: effectiveCodexSandbox(ctx),

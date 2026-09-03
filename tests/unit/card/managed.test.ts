@@ -32,6 +32,20 @@ describe('managed card sending', () => {
     );
   });
 
+  it('falls back to a raw card when CardKit cannot create a card id', async () => {
+    const channel = {
+      createCard: vi.fn(async () => {
+        throw new Error('cardkit.card.create returned no card_id');
+      }),
+      send: vi.fn(async () => ({ messageId: 'om_create_failed' })),
+    };
+
+    const result = await sendManagedCard(channel as never, 'oc_chat', { body: 'legacy-card' });
+
+    expect(result).toEqual({ messageId: 'om_create_failed' });
+    expect(channel.send).toHaveBeenCalledWith('oc_chat', { card: { body: 'legacy-card' } }, undefined);
+  });
+
   it('updates card-id managed messages by card id', async () => {
     const channel = {
       createCard: vi.fn(async () => ({ cardId: 'card_normal' })),

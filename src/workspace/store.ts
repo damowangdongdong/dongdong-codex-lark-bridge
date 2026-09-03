@@ -143,6 +143,8 @@ export class WorkspaceStore {
       launchMode,
       ...(launchMode === 'resume' ? { launchPending: true } : {}),
       ...(previous.codexSandbox ? { codexSandbox: previous.codexSandbox } : {}),
+      ...(previous.codexModel !== undefined ? { codexModel: previous.codexModel } : {}),
+      ...(previous.codexPersonality ? { codexPersonality: previous.codexPersonality } : {}),
     };
     this.schedulePersist();
   }
