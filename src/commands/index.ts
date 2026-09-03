@@ -184,6 +184,7 @@ interface ResumeCandidate {
 
 const RESUME_CANDIDATE_TTL_MS = 10 * 60 * 1000;
 const resumeCandidates = new Map<string, ResumeCandidate>();
+const projectChatResolutions = new Map<string, Promise<ResolvedProjectChat | undefined>>();
 const AUDIT_SAFE_COMMAND_REPLY = '命令已处理。';
 const RESUME_APPLIED_REPLY = '已完成，请继续发送下一条消息。';
 const PROJECT_CHAT_LOOKUP_TIMEOUT_MS = 10_000;
@@ -1409,11 +1410,25 @@ async function handleWorkspaceLaunch(args: string, ctx: CommandContext): Promise
     ctx.workspaces.cancelCodexLaunch(ctx.scope);
     if (ctx.chatMode === 'p2p') ctx.workspaces.removeCwd(ctx.scope);
 
-    const anchor = await ctx.channel.send(project.chatId, {
-      markdown: rawMode === 'new'
-        ? `🚀 已选择 ${formatCodexProfile(profile)}\n📁 \`${cwd}\`\n\n下一条消息将在本项目群创建新 Codex 会话。`
-        : `🔁 已选择 ${formatCodexProfile(profile)}\n📁 \`${cwd}\`\n\n正在读取可恢复的 Codex 会话…`,
-    });
+    let anchor: { messageId: string };
+    try {
+      anchor = await ctx.channel.send(project.chatId, {
+        markdown: rawMode === 'new'
+          ? `${project.created ? '🚀 已创建' : '🔁 已复用'}项目群\n已选择 ${formatCodexProfile(profile)}\n📁 \`${cwd}\`\n\n下一条消息将在本项目群创建新 Codex 会话。`
+          : `${project.created ? '🚀 已创建' : '🔁 已复用'}项目群\n已选择 ${formatCodexProfile(profile)}\n📁 \`${cwd}\`\n\n正在读取可恢复的 Codex 会话…`,
+      });
+    } catch (err) {
+      log.warn('command', 'project-chat-notify-failed', {
+        cwd,
+        chatId: project.chatId,
+        message: err instanceof Error ? err.message : String(err),
+      });
+      await reply(
+        ctx,
+        `${project.created ? '✓ 已创建' : '✓ 已复用'}路径对应的项目群 **${project.name}**，但群内提示发送失败，请在飞书群列表中搜索该群。`,
+      );
+      return;
+    }
     launchCtx = projectCommandContext(ctx, project.chatId, anchor.messageId);
     await reply(
       ctx,
@@ -1449,6 +1464,27 @@ interface ResolvedProjectChat {
 }
 
 async function resolveProjectChat(
+  ctx: CommandContext,
+  cwd: string,
+  requestedName?: string,
+): Promise<ResolvedProjectChat | undefined> {
+  // A slow Feishu callback can be retried before the first createChat call
+  // returns. Serialize resolutions for the same operator and canonical path
+  // so retries observe the same in-flight result instead of creating a group.
+  const key = `${ctx.msg.senderId}\u0000${cwd}`;
+  const pending = projectChatResolutions.get(key);
+  if (pending) return pending;
+
+  const resolution = resolveProjectChatInternal(ctx, cwd, requestedName);
+  projectChatResolutions.set(key, resolution);
+  try {
+    return await resolution;
+  } finally {
+    if (projectChatResolutions.get(key) === resolution) projectChatResolutions.delete(key);
+  }
+}
+
+async function resolveProjectChatInternal(
   ctx: CommandContext,
   cwd: string,
   requestedName?: string,

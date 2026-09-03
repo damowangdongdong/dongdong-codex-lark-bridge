@@ -41,6 +41,9 @@ interface Harness {
   projectChats: {
     chats: Array<{ id: string; name: string; members: string[] }>;
     createCalls: number;
+    createAttempts: number;
+    createGate?: Promise<void>;
+    onCreate?: () => void;
     getError?: Error;
     getNeverResolves?: boolean;
     onGet?: () => void;
@@ -582,6 +585,42 @@ describe('agent-aware resume commands', () => {
     });
   });
 
+  it('deduplicates concurrent project-group launch callbacks and announces reuse in the group', async () => {
+    const h = await createHarness('codex');
+
+    await expect(h.run(`/cd ${h.tmp.workspace}`)).resolves.toBe(true);
+    let releaseCreate!: () => void;
+    h.projectChats.createGate = new Promise<void>((resolve) => {
+      releaseCreate = resolve;
+    });
+    let markCreateStarted!: () => void;
+    const createStarted = new Promise<void>((resolve) => {
+      markCreateStarted = resolve;
+    });
+    h.projectChats.onCreate = () => markCreateStarted();
+
+    const first = h.dispatchLaunch('freerouter', 'new');
+    await createStarted;
+    const second = h.dispatchLaunch('freerouter', 'new');
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(h.projectChats.createAttempts).toBe(1);
+    releaseCreate();
+
+    await Promise.all([first, second]);
+
+    expect(h.projectChats.createCalls).toBe(1);
+    expect(h.projectChats.chats).toHaveLength(1);
+
+    await expect(h.run(`/cd ${h.tmp.workspace}`)).resolves.toBe(true);
+    await h.dispatchLaunch('freerouter', 'new');
+
+    expect(h.projectChats.createCalls).toBe(1);
+    expect(h.channel.sent.some((entry) =>
+      entry.chatId === 'oc_project_1'
+      && JSON.stringify(entry.content).includes('🔁 已复用项目群'),
+    )).toBe(true);
+  });
+
   it('对同一路径复用请求者仍在其中的项目群，群已删除时才重建', async () => {
     const h = await createHarness('codex');
 
@@ -1058,6 +1097,7 @@ async function createHarness(
   const projectChats: Harness['projectChats'] = {
     chats: [],
     createCalls: 0,
+    createAttempts: 0,
     getMembersCalls: [],
   };
   Object.assign(channel, {
@@ -1082,6 +1122,9 @@ async function createHarness(
       return chat.members.map((id) => ({ id, idType: 'open_id' }));
     },
     createChat: async (input: { name: string; inviteUserIds?: string[] }) => {
+      projectChats.createAttempts += 1;
+      projectChats.onCreate?.();
+      if (projectChats.createGate) await projectChats.createGate;
       projectChats.createCalls += 1;
       const chat = {
         id: `oc_project_${projectChats.createCalls}`,

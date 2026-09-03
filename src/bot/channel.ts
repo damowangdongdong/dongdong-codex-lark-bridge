@@ -369,8 +369,11 @@ export async function startChannel(deps: StartChannelDeps): Promise<BridgeChanne
     reject: (evt) => {
       log.info('intake', 'reject', { chatId: evt.chatId, reason: evt.reason });
     },
-    cardAction: async (evt) => {
-      await withTrace({ chatId: evt.chatId, msgId: evt.messageId }, async () => {
+    cardAction: (evt) => {
+      // Feishu expects the interactive callback synchronously. Commands such
+      // as project-group creation may take longer than its callback window;
+      // acknowledge the click now and deliver the command result via chat.
+      void withTrace({ chatId: evt.chatId, msgId: evt.messageId }, async () => {
         await handleCardAction({
           channel,
           evt,
@@ -388,6 +391,7 @@ export async function startChannel(deps: StartChannelDeps): Promise<BridgeChanne
           callbackPolicyFingerprintForScope: (scope) => activePolicyFingerprints.get(scope),
         });
       }).catch((err) => log.fail('cardAction', err));
+      return { toast: { type: 'info', content: '已收到，处理中，结果会发送到对话。' } };
     },
     comment: async (evt) => {
       await withTrace({ chatId: 'comment' }, async () => {
