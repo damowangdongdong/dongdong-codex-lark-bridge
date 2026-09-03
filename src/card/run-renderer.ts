@@ -181,12 +181,13 @@ function renderToolGroup(tools: ToolEntry[], finalized: boolean): object[] {
   if (finalized) {
     return [collapsedToolSummary(tools, true)];
   }
-  // Running: collapse prior tools, keep latest visible.
+  // Running: keep the latest tool visible, but collapsed like every other
+  // tool so a long command output never takes over the card by default.
   const prior = tools.slice(0, -1);
   const latest = tools[tools.length - 1];
   const out: object[] = [];
   if (prior.length > 0) out.push(collapsedToolSummary(prior, false));
-  if (latest) out.push(toolPanel(latest, true));
+  if (latest) out.push(toolPanel(latest, false));
   return out;
 }
 
@@ -241,8 +242,8 @@ function toolPanel(tool: ToolEntry, expanded: boolean): object {
  * errors that abort the entire card stream. Tool details are still in the
  * file log; users who really need them can `/doctor` to inspect.
  *
- * The latest-running tool, when applicable, is rendered separately via
- * `toolPanel(latest, true)` so live observation isn't sacrificed.
+ * The latest-running tool, when applicable, is rendered separately so its
+ * status remains visible without expanding its potentially large body.
  */
 function collapsedToolSummary(tools: ToolEntry[], finalized: boolean): object {
   const suffix = finalized ? '（已结束）' : '';

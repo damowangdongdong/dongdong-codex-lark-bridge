@@ -8,6 +8,15 @@ Bridge Feishu / Lark messages to a locally installed Claude Code or Codex CLI. S
 
 Requirements: Node.js `>= 20.12.0`, a logged-in `claude` or `codex` executable, and a Feishu/Lark PersonalAgent app.
 
+If you choose Codex, grant the PersonalAgent app these project-group permissions in the Feishu developer console:
+
+- `im:chat` to create project groups.
+- At least one member-read scope: `im:chat:readonly`, `im:chat`, `im:chat.group_info:readonly`, or `im:chat.members:read`. `im:chat` satisfies both requirements.
+
+The bridge preflights these **bot application-identity scopes** at startup. Without them, the profile stays offline and the bridge prints a developer-console authorization link; `lark-cli auth login` (user OAuth) cannot grant application scopes. Member-read access is used to check whether the requesting user is still in the path-bound project group: only a confirmed departure clears the old binding and creates a new group. Lookup failures and timeouts do not create a group, avoiding duplicates.
+
+The Web console's "My groups" picker is separate: it requests user OAuth scope `im:chat:read` only when that picker is used, and it does not replace the bot member-read scope above.
+
 ```bash
 npm install --global lark-channel-bridge
 lark-channel-bridge run
@@ -40,7 +49,7 @@ Every command has a concrete example and a visible result. Use `/help` in Feishu
 | `/ws use` | `/ws use backend` | Switches to a named workspace; Codex asks for profile and new/resume. |
 | `/ws remove` | `/ws remove backend` | Removes the alias without touching files. |
 | `/new`, `/clear`, `/reset` | `/new` | Starts a fresh session in the current scope. |
-| `/resume` | `/resume 2` | Shows page 2 of compatible history and lets you restore a thread. |
+| `/resume` | `/resume 2` | Shows page 2 of compatible history, lets you restore a thread, and choose whether to post its history. |
 | `/new chat` | `/new chat Release check` | Creates or reuses a Codex project group for the current path and starts a new thread. |
 | `/profile` | `/profile` | Selects the Codex CLI profile for a DM or project group. |
 | `/attach` | `/attach` | Prints the exact `codex --remote ... resume ...` command for the same thread. |
@@ -64,7 +73,7 @@ Every command has a concrete example and a visible result. Use `/help` in Feishu
 
 The bridge keeps a Codex 0.152.x-compatible inventory. `/codex commands` prints it in Feishu. App-server examples include `/apps`, `/plugins`, `/hooks`, `/rename name`, `/archive`, `/delete` then `/delete confirm`, `/compact`, `/experimental`, `/memories`, `/skill name instruction`, `/skills`, `/mcp verbose`, `/model`, `/fast`, `/plan`, `/goal objective`, `/personality`, `/clean`, `/fork`, `/review`, `/usage`, `/debug-config`, and `/logout`; each returns the corresponding Codex result. Commands that depend on terminal-local TUI state, such as `/ide`, `/vim`, `/diff`, `/approve`, `/theme`, and `/quit`, return the exact `/attach` instruction instead of claiming to run remotely.
 
-While a turn runs, **↵ Insert now** steers it immediately and **⇥ Queue** waits until it finishes. `/attach` mirrors terminal input, progress, and final answers to Feishu. Codex history is paginated and keeps reasoning, tool input/output, terminal input, and token usage in separate expandable sections.
+While a turn runs, **↵ Insert now** steers it immediately and **⇥ Queue** waits until it finishes. `/attach` mirrors terminal input, progress, and final answers to Feishu without posting a duplicate full trace. After a resume, the bridge asks whether to post the history; if sent, it is packed into as few collapsed cards as the Feishu size limit allows.
 
 ## Configuration and operations
 

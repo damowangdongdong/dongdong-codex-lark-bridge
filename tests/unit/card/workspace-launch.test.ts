@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   codexSkillsCard,
   resumeCard,
+  resumeHistoryChoiceCard,
   workspaceLaunchCard,
   workspaceNewCard,
 } from '../../../src/card/templates.js';
@@ -88,6 +89,12 @@ describe('Codex workspace launch cards', () => {
     expect(JSON.stringify(panels[0])).not.toContain('$beta');
     expect(JSON.stringify(panels[1])).toContain('$beta');
     expect(JSON.stringify(panels[1])).not.toContain('$alpha');
+  });
+
+  it('offers send and skip actions for resumed history context', () => {
+    const card = resumeHistoryChoiceCard('history-nonce');
+    expect(actions(card)).toContainEqual({ cmd: 'resume.history.send', arg: 'history-nonce' });
+    expect(actions(card)).toContainEqual({ cmd: 'resume.history.skip', arg: 'history-nonce' });
   });
 
   it('offers resume from the new-session confirmation card', () => {

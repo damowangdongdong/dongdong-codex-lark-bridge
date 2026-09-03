@@ -57,6 +57,11 @@ interface Harness {
     arg: string,
     options?: { chatId?: string; chatMode?: 'p2p' | 'group' | 'topic' },
   ): Promise<void>;
+  dispatchHistoryArg(
+    choice: 'send' | 'skip',
+    arg: string,
+    options?: { chatId?: string; chatMode?: 'p2p' | 'group' | 'topic' },
+  ): Promise<void>;
   dispatchTakeoverArg(
     arg: string,
     options?: { chatId?: string; chatMode?: 'p2p' | 'group' | 'topic' },
@@ -158,7 +163,10 @@ describe('agent-aware resume commands', () => {
     await expect(h.run(`/resume use ${nonce}`)).resolves.toBe(true);
 
     expect(h.sessions.getRaw('chat-1')).toBeUndefined();
-    expect(lastMarkdown(h.channel)).toContain('已完成');
+    expect(lastContentString(h.channel)).toContain('是否发送历史上下文');
+    const historyNonce = historyNonceFromCard(lastContent(h.channel));
+    await h.dispatchHistoryArg('skip', historyNonce);
+    expect(lastMarkdown(h.channel)).toContain('已跳过历史上下文');
   });
 
   it('falls back to an audit-safe reply when resume confirmation is rejected', async () => {
@@ -180,8 +188,8 @@ describe('agent-aware resume commands', () => {
 
     await expect(h.run(`/resume use ${nonce}`)).resolves.toBe(true);
 
-    expect(attempts).toBe(2);
-    expect(lastMarkdown(h.channel)).toBe('命令已处理。');
+    expect(attempts).toBe(3);
+    expect(lastContentString(h.channel)).toContain('是否发送历史上下文');
   });
 
   it('shows only the current catalog-backed Codex thread in /resume', async () => {
@@ -259,7 +267,8 @@ describe('agent-aware resume commands', () => {
       threadId: 'thread-beta-secret',
     });
     expect(h.sessions.getRaw('chat-1')).toBeUndefined();
-    expect(h.agent.appServerRequests.at(-2)).toMatchObject({
+    expect(h.agent.appServerRequests).toHaveLength(1);
+    expect(h.agent.appServerRequests.at(-1)).toMatchObject({
       method: 'thread/resume',
       params: {
         threadId: 'thread-beta-secret',
@@ -268,6 +277,8 @@ describe('agent-aware resume commands', () => {
         sandbox: 'danger-full-access',
       },
     });
+    const historyNonce = historyNonceFromCard(lastContent(h.channel));
+    await h.dispatchHistoryArg('send', historyNonce);
     expect(h.agent.appServerRequests.at(-1)).toMatchObject({
       method: 'thread/read',
       params: { threadId: 'thread-beta-secret', includeTurns: true },
@@ -347,7 +358,7 @@ describe('agent-aware resume commands', () => {
       params: { threadId: 'thread-raced' },
     });
     expect(h.catalog.activeFor(h.identity)).toMatchObject({ threadId: 'thread-raced' });
-    expect(lastMarkdown(h.channel)).toContain('已完成');
+    expect(lastContentString(h.channel)).toContain('是否发送历史上下文');
   });
 
   it('offers the current catalog fallback even when another identity has a stale active entry', async () => {
@@ -410,7 +421,7 @@ describe('agent-aware resume commands', () => {
     expect(h.agent.takeoverThreadWriterCalls).toEqual(['thread-busy']);
     expect(h.agent.appServerRequests.filter((request) => request.method === 'thread/resume')).toHaveLength(2);
     expect(h.catalog.activeFor(h.identity)).toMatchObject({ threadId: 'thread-busy' });
-    expect(lastMarkdown(h.channel)).toContain('已终止占用进程并完成接管');
+    expect(lastContentString(h.channel)).toContain('是否发送历史上下文');
   });
 
   it('keeps the catalog unchanged when the writer is still active after takeover', async () => {
@@ -461,7 +472,7 @@ describe('agent-aware resume commands', () => {
     expect(h.catalog.activeFor(h.identity)).toMatchObject({
       threadId: 'thread-alpha-secret',
     });
-    expect(lastMarkdown(h.channel)).toContain('已完成');
+    expect(lastContentString(h.channel)).toContain('是否发送历史上下文');
   });
 
   it('keeps a Codex resume selected when reading its display history fails', async () => {
@@ -474,6 +485,8 @@ describe('agent-aware resume commands', () => {
     await expect(h.run(`/resume use ${nonce}`)).resolves.toBe(true);
 
     expect(h.catalog.activeFor(h.identity)).toMatchObject({ threadId: 'thread-offline' });
+    const historyNonce = historyNonceFromCard(lastContent(h.channel));
+    await h.dispatchHistoryArg('send', historyNonce);
     expect(lastMarkdown(h.channel)).toContain('会话已恢复');
     expect(lastMarkdown(h.channel)).toContain('读取历史记录失败');
   });
@@ -1367,6 +1380,32 @@ async function createHarness(
     });
   };
 
+  const dispatchHistoryArg = (
+    choice: 'send' | 'skip',
+    arg: string,
+    dispatchOptions: { chatId?: string; chatMode?: 'p2p' | 'group' | 'topic' } = {},
+  ): Promise<void> => {
+    const chatId = dispatchOptions.chatId ?? 'chat-1';
+    cardModes.set(chatId, dispatchOptions.chatMode ?? 'p2p');
+    return handleCardAction({
+      channel: channel as unknown as Parameters<typeof handleCardAction>[0]['channel'],
+      evt: cardEvent({ cmd: `resume.history.${choice}`, arg }, undefined, chatId),
+      sessions,
+      sessionCatalog: catalog,
+      workspaces,
+      activeRuns,
+      agent,
+      controls,
+      pending,
+      chatModeCache,
+      codexHistoryProvider: async (options) => {
+        codexHistoryRequests.push(options);
+        return codexHistory;
+      },
+      claudeHistoryProvider: async () => claudeHistory,
+    });
+  };
+
   const dispatchTakeoverArg = (
     arg: string,
     dispatchOptions: { chatId?: string; chatMode?: 'p2p' | 'group' | 'topic' } = {},
@@ -1500,7 +1539,8 @@ async function createHarness(
     pending,
     projectChats,
     run,
-    dispatchResumeArg,
+  dispatchResumeArg,
+    dispatchHistoryArg,
     dispatchTakeoverArg,
     dispatchLaunch,
     dispatchProfile,
@@ -1638,6 +1678,18 @@ function takeoverArgsFromCard(card: unknown): string[] {
     if (action?.cmd === 'resume.takeover' && typeof action.arg === 'string') out.push(action.arg);
   });
   return out;
+}
+
+function historyNonceFromCard(card: unknown): string {
+  let nonce: string | undefined;
+  walkCard(card, (action) => {
+    if (action?.cmd === 'resume.history.send' && typeof action.arg === 'string') {
+      nonce = action.arg;
+    }
+  });
+  expect(nonce).toBeTypeOf('string');
+  if (!nonce) throw new Error('missing history nonce');
+  return nonce;
 }
 
 function walkCard(

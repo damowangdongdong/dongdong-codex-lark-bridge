@@ -18,7 +18,6 @@ import type { AgentAdapter, AgentEvent, AgentExternalRun } from '../agent/types'
 import { handleCardAction } from '../card/dispatcher';
 import { CallbackAuth } from '../card/callback-auth';
 import { CallbackNonceStore } from '../card/callback-store';
-import { renderRunTraceCards } from '../card/codex-trace';
 import { renderCard, type RunCardRenderOptions } from '../card/run-renderer';
 import {
   finalizeIfRunning,
@@ -656,8 +655,6 @@ export async function renderExternalCodexRun(input: {
       chatId: binding.chatId,
       scope: binding.scopeId,
       state: finalAnswerOnlyState(state),
-      traceState: state,
-      codexContext: { profile: binding.profile, sandbox: binding.sandbox },
       replyMode: 'card',
       sendOpts:
         binding.messageThreadId && binding.replyTo
@@ -1316,8 +1313,6 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
           chatId,
           scope,
           state: finalAnswerOnlyState(finalState),
-          traceState: finalState,
-          codexContext: cardRenderOptions.codexContext,
           replyMode,
           sendOpts,
           cardRenderOptions,
@@ -1392,8 +1387,6 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
           chatId,
           scope,
           state: finalReplyState(progress, filterForPrefs(latestState)),
-          traceState: latestState,
-          codexContext: cardRenderOptions.codexContext,
           replyMode,
           sendOpts,
           cardRenderOptions,
@@ -1457,8 +1450,6 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
           chatId,
           scope,
           state: finalReplyState(progress, filterForPrefs(latestState)),
-          traceState: latestState,
-          codexContext: cardRenderOptions.codexContext,
           replyMode,
           sendOpts,
           cardRenderOptions,
@@ -1484,12 +1475,6 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
           controls.profileConfig.agentKind === 'codex'
             ? finalAnswerOnlyState(filterForPrefs(finalState))
             : filterForPrefs(finalState),
-        ...(controls.profileConfig.agentKind === 'codex'
-          ? {
-              traceState: finalState,
-              codexContext: cardRenderOptions.codexContext,
-            }
-          : {}),
         replyMode,
         sendOpts,
         cardRenderOptions,
@@ -1659,37 +1644,10 @@ async function sendFinalReply(input: {
   chatId: string;
   scope: string;
   state: RunState;
-  traceState?: RunState;
-  codexContext?: { profile?: string; sandbox: string };
   replyMode: ReturnType<typeof getMessageReplyMode>;
   sendOpts?: { replyTo: string; replyInThread?: boolean };
   cardRenderOptions: { signCallback?: (action: string) => string };
 }): Promise<void> {
-  if (input.traceState && input.codexContext) {
-    const cards = renderRunTraceCards(input.traceState, input.codexContext);
-    let sentPages = 0;
-    try {
-      for (const card of cards) {
-        const result = await input.channel.send(input.chatId, { card }, input.sendOpts);
-        requireMessageReceipt(result, 'Codex trace card');
-        sentPages += 1;
-      }
-      if (cards.length) {
-        log.info('outbound', 'codex-trace-sent', {
-          scope: input.scope,
-          pages: cards.length,
-        });
-      }
-    } catch (err) {
-      log.warn('outbound', 'codex-trace-failed', {
-        scope: input.scope,
-        sentPages,
-        pages: cards.length,
-        err: err instanceof Error ? err.message : String(err),
-      });
-    }
-  }
-
   const body = renderText(input.state);
 
   // Nothing deliverable to send (agent produced no text on a clean finish;

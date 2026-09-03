@@ -186,6 +186,26 @@ describe('Codex trace cards', () => {
     expect(rendered).toContain('z'.repeat(2_000));
   });
 
+  it('packs short histories into one collapsed message', () => {
+    const cards = renderCodexHistoryCards({
+      thread: {
+        id: 'thread-packed',
+        turns: Array.from({ length: 40 }, (_, index) => ({
+          status: 'completed',
+          items: [
+            { type: 'userMessage', content: [{ type: 'input_text', text: `question-${index}` }] },
+            { type: 'agentMessage', phase: 'final_answer', text: `answer-${index}` },
+          ],
+        })),
+      },
+    }, '/repo');
+
+    expect(cards.length).toBeLessThan(5);
+    expect(JSON.stringify(cards[0])).toContain('question-0');
+    expect(JSON.stringify(cards[0])).toContain('answer-39');
+    expect(JSON.stringify(cards[0])).toContain('"expanded":false');
+  });
+
   it('uses the existing Feishu-safe email rendering for trace content', () => {
     const state = stateFrom([
       { type: 'tool_use', id: 'tool-1', name: 'git', input: { command: 'show' } },
@@ -263,7 +283,7 @@ describe('Codex resumed-history cards', () => {
     const cards = renderCodexHistoryCards(result, '/repo');
     const rendered = JSON.stringify(cards);
 
-    expect(cards.length).toBeGreaterThan(1);
+    expect(cards).toHaveLength(1);
     expect(rendered).toContain('original question');
     expect(rendered).toContain('answer-');
     expect(rendered).toContain('-end');

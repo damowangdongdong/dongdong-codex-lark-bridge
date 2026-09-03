@@ -31,6 +31,7 @@ import {
   codexProfileCard,
   permissionsCard,
   resumeCard,
+  resumeHistoryChoiceCard,
   resumeTakeoverCard,
   statusCard,
   workspaceLaunchCard,
@@ -180,7 +181,7 @@ interface ResumeCandidate {
   policyFingerprint: string;
   sessionId?: string;
   threadId?: string;
-  kind: 'resume' | 'takeover';
+  kind: 'resume' | 'takeover' | 'history';
   expiresAt: number;
 }
 
@@ -2060,6 +2061,14 @@ async function handleResume(args: string, ctx: CommandContext): Promise<void> {
     }
     return applyResumeTakeover(rest, ctx);
   }
+  if (sub === 'history') {
+    const [choice, nonce] = rest.split(/\s+/, 2);
+    if (!nonce || (choice !== 'send' && choice !== 'skip')) {
+      await reply(ctx, '请从历史上下文选择卡执行操作。');
+      return;
+    }
+    return applyResumeHistoryChoice(nonce, choice === 'send', ctx);
+  }
   // Default: list recent sessions
   const n = Number.parseInt(sub, 10);
   const limit = Number.isFinite(n) && n > 0 && n <= 20 ? n : 5;
@@ -2324,7 +2333,34 @@ async function activateCodexResume(
   ctx.workspaces.confirmCodexResume(ctx.scope);
   bindCodexThread(ctx, threadId, identity.cwdRealpath);
   await reply(ctx, successMessage);
-  await sendCodexResumeHistory(ctx, threadId, identity.cwdRealpath);
+  const historyNonce = issueResumeCandidate(identity, { threadId }, 'history');
+  await ctx.channel.send(
+    ctx.msg.chatId,
+    { card: resumeHistoryChoiceCard(historyNonce) },
+    commandReplyOptions(ctx),
+  );
+}
+
+async function applyResumeHistoryChoice(
+  nonce: string,
+  sendHistory: boolean,
+  ctx: CommandContext,
+): Promise<void> {
+  const identity = ctx.sessionCatalogIdentity;
+  if (!identity || identity.agentId !== 'codex') {
+    await reply(ctx, '当前上下文没有可发送的 Codex 历史记录。');
+    return;
+  }
+  const candidate = consumeResumeCandidate(nonce, identity, 'history');
+  if (!candidate?.threadId) {
+    await reply(ctx, '历史上下文选择已过期，请重新使用 `/resume`。');
+    return;
+  }
+  if (!sendHistory) {
+    await reply(ctx, '已跳过历史上下文。');
+    return;
+  }
+  await sendCodexResumeHistory(ctx, candidate.threadId, identity.cwdRealpath);
 }
 
 function isActiveWriterError(err: unknown): boolean {
@@ -2351,6 +2387,10 @@ async function sendCodexResumeHistory(
       { threadId, includeTurns: true },
     );
     const cards = renderCodexHistoryCards(result, cwd);
+    if (cards.length === 0) {
+      await reply(ctx, '当前会话没有可显示的历史上下文。');
+      return;
+    }
     for (const card of cards) {
       await ctx.channel.send(ctx.msg.chatId, { card }, commandReplyOptions(ctx));
     }

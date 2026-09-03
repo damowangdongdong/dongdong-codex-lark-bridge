@@ -559,6 +559,24 @@ export function resumeTakeoverCard(threadId: string, nonce: string): object {
   ]);
 }
 
+/** Ask whether the transcript should be posted after a Codex resume. */
+export function resumeHistoryChoiceCard(nonce: string): object {
+  return shell('📚 是否发送历史上下文？', [
+    divMd('会话已恢复。历史上下文可能较长，请选择是否发送到当前对话。'),
+    actions([
+      {
+        text: '发送历史上下文',
+        value: { cmd: 'resume.history.send', arg: nonce },
+        style: 'primary',
+      },
+      {
+        text: '跳过，不发送',
+        value: { cmd: 'resume.history.skip', arg: nonce },
+      },
+    ]),
+  ]);
+}
+
 export function helpCard(agentName = 'Agent', botName?: string): object {
   const visibleBotName = botName?.trim() || agentName;
   const escapedBotName = escapeMd(visibleBotName);

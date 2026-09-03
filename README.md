@@ -26,6 +26,15 @@
   - [Codex CLI 文档](https://developers.openai.com/codex/cli)，命令为 `codex`。
 - 一个飞书 / Lark PersonalAgent 应用。首次运行的二维码向导可以创建并绑定应用。
 
+选择 Codex 时，飞书应用还必须在开发者后台开通项目群权限：
+
+- `im:chat`：创建项目群。
+- 以下成员读取权限至少开通一个：`im:chat:readonly`、`im:chat`、`im:chat.group_info:readonly`、`im:chat.members:read`。其中 `im:chat` 同时满足建群和成员读取要求。
+
+Bridge 启动时会预检这些 **Bot 应用身份权限**；缺少权限时不会上线，并提示开发者后台授权链接。`lark-cli auth login` 的用户授权不能替代应用权限。成员读取权限用于检查路径绑定的项目群中当前用户是否仍在群内：用户已退群时才会清除旧绑定并创建新群；如果查询失败或超时，Bridge 会停止本次创建以避免重复建群。
+
+Web 控制台“我的群”列表是另一条用户授权流程，只在使用该功能时请求 `im:chat:read`，不用于替代上述 Bot 成员读取权限。
+
 ### 安装并启动
 
 ```bash
@@ -94,7 +103,7 @@ Cloud-doc comments are document-scoped：云文档评论按文档权限生效，
 | `/new` | `/new` | 中断当前任务，清空当前私聊、群或话题的会话，下一条消息从全新会话开始。 |
 | `/clear` | `/clear` | `/new` 的同义命令。 |
 | `/reset` | `/reset` | `/new` 的同义命令。 |
-| `/resume` | `/resume 2` | 打开第 2 页历史会话；点选某项后恢复，并发送可展开的完整历史。 |
+| `/resume` | `/resume 2` | 打开第 2 页历史会话；点选某项后恢复，再按卡片选择是否发送历史上下文。 |
 | `/new chat` | `/new chat 发布检查` | Codex 下按当前路径创建或复用专属项目群，并创建新的 thread。 |
 | `/profile` | `/profile` | Codex 私聊中选择 Bot 默认 CLI profile；项目群中选择该群 profile，并继续新建或恢复会话。 |
 | `/attach` | `/attach` | 输出 `codex --remote ... resume ...` 命令；在本机终端运行后，终端和飞书共享同一个 thread。 |
@@ -152,7 +161,7 @@ Web 控制台的会议设置还包括：被邀请时自动入会、字幕保留�
 
 ## Codex CLI 命令覆盖
 
-Codex profile 使用常驻 `codex app-server`。在 turn 运行时，运行卡上的 **↵ 立即插入** 会立即 steer 当前 turn，**⇥ 排队** 会等当前 turn 完成后再执行。发送 `/codex commands` 可以在飞书里随时查看当前版本（兼容 Codex 0.152.x）的清单。
+Codex profile 使用常驻 `codex app-server`。在 turn 运行时，运行卡上的 **↵ 立即插入** 会立即 steer 当前 turn，**⇥ 排队** 会等当前 turn 完成后再执行。普通 turn 只发送运行卡和最终回复，不会额外重复发送完整轨迹；恢复历史后可通过选择卡按需发送聚合的历史上下文。发送 `/codex commands` 可以在飞书里随时查看当前版本（兼容 Codex 0.152.x）的清单。
 
 ### app-server 命令
 

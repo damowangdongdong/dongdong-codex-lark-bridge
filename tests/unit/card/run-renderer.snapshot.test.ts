@@ -52,6 +52,18 @@ describe('run card renderer snapshots', () => {
     expect(rendered).toContain('"expanded":false');
   });
 
+  it('keeps a single running tool collapsed by default', () => {
+    const rendered = renderCard(stateFrom([
+      { type: 'tool_use', id: 'tool-1', name: 'Bash', input: { command: 'pwd' } },
+    ])) as { body: { elements: Array<Record<string, unknown>> } };
+    const toolPanel = rendered.body.elements.find((element) =>
+      element.tag === 'collapsible_panel'
+      && JSON.stringify(element).includes('Bash'),
+    );
+
+    expect(toolPanel).toMatchObject({ expanded: false });
+  });
+
   it('collapses consecutive tools while preserving the latest running tool', () => {
     expectCard(stateFrom([
       { type: 'tool_use', id: 'tool-1', name: 'Bash', input: { command: 'pwd' } },

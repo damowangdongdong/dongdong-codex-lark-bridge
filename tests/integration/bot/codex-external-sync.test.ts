@@ -6,7 +6,7 @@ import { PendingQueue } from '../../../src/bot/pending-queue.js';
 import { createFakeChannel } from '../../helpers/fake-channel.js';
 
 describe('attached Codex terminal synchronization', () => {
-  it('renders terminal input and output, sends full trace pages, and releases the scope', async () => {
+  it('renders terminal input and output without posting a duplicate trace, and releases the scope', async () => {
     const channel = createFakeChannel();
     const activeRuns = new ActiveRuns();
     const flushed = vi.fn();
@@ -44,14 +44,10 @@ describe('attached Codex terminal synchronization', () => {
     expect(activeRuns.get('chat-1')).toBeUndefined();
     const liveCards = JSON.stringify(channel.streams[0]?.cardUpdates);
     expect(liveCards).toContain('typed in attached terminal');
-    const traceCards = JSON.stringify(channel.sent.map((entry) => entry.content));
-    expect(traceCards).toContain('Codex 完整轨迹');
-    expect(traceCards).toContain('terminal final answer');
-    expect(traceCards).toContain('User input');
-    expect(traceCards).toContain('typed in attached terminal');
-    expect(traceCards).toContain('terminal reasoning');
-    expect(traceCards).toContain('terminal commentary');
-    expect(traceCards).toContain('shell · output');
+    expect(channel.sent).toHaveLength(1);
+    const finalCard = JSON.stringify(channel.sent[0]?.content);
+    expect(finalCard).toContain('terminal final answer');
+    expect(finalCard).not.toContain('Codex 完整轨迹');
 
     pending.push('chat-1', message());
     await vi.waitFor(() => expect(flushed).toHaveBeenCalledOnce());

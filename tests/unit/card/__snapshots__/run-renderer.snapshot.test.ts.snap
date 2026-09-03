@@ -50,7 +50,7 @@ _运行中…_",
             "text_size": "notation",
           },
         ],
-        "expanded": true,
+        "expanded": false,
         "header": {
           "icon": {
             "size": "16px 16px",

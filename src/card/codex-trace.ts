@@ -5,6 +5,7 @@ import { deepMaskEmails } from './mask-email';
 
 const SECTION_CHARS = 7_000;
 const PAGE_CHARS = 12_000;
+const HISTORY_PAGE_CHARS = 26_000;
 
 interface TraceSection {
   title: string;
@@ -86,11 +87,15 @@ export function renderCodexHistoryCards(result: unknown, cwd: string): object[] 
     }
   });
   if (!sections.length) sections.push({ title: '历史', body: '_此会话没有可显示的历史内容。_' });
-  const pages = paginate(sections);
+  // History is already opt-in, so pack it into as few messages as the card
+  // size allows. Each page gets one collapsed inner panel; individual turns
+  // are represented as headings inside that panel instead of hundreds of
+  // sibling collapsible elements.
+  const pages = paginate(sections, HISTORY_PAGE_CHARS).map(historyPageSection);
   return pages.map((page, index) => traceCard(
     `🔁 Codex 历史 ${index + 1}/${pages.length}`,
     `**${escapeMd(name || '(未命名)')}** · \`${escapeCode(threadId)}\`\n📁 \`${escapeCode(cwd)}\``,
-    page,
+    [page],
     `📚 完整历史对话${pages.length > 1 ? ` · ${index + 1}/${pages.length}` : ''}`,
   ));
 }
@@ -177,13 +182,22 @@ function sectionChunks(
   return chunks;
 }
 
-function paginate(sections: TraceSection[]): TraceSection[][] {
+function historyPageSection(sections: TraceSection[]): TraceSection {
+  return {
+    title: '📚 历史消息（点击查看）',
+    body: sections
+      .map((section) => `**${escapeMd(section.title)}**\n${section.body}`)
+      .join('\n\n---\n\n'),
+  };
+}
+
+function paginate(sections: TraceSection[], pageChars = PAGE_CHARS): TraceSection[][] {
   const pages: TraceSection[][] = [];
   let page: TraceSection[] = [];
   let chars = 0;
   for (const section of sections) {
     const size = section.title.length + section.body.length;
-    if (page.length && chars + size > PAGE_CHARS) {
+    if (page.length && chars + size > pageChars) {
       pages.push(page);
       page = [];
       chars = 0;
