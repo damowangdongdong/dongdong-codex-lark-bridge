@@ -105,6 +105,20 @@ describe('agent-aware resume commands', () => {
     });
   });
 
+  it('reports the previous Codex thread id in a separate message when starting fresh', async () => {
+    const h = await createHarness('codex');
+    h.catalog.upsertActive({ ...h.identity, threadId: '0199-old-thread', now: 1000 });
+
+    await expect(h.run('/new')).resolves.toBe(true);
+
+    expect(h.channel.sent).toHaveLength(2);
+    expect(h.channel.sent[0]?.content).toEqual({
+      markdown: '上一个 Codex 会话 ID：`0199-old-thread`',
+    });
+    expect(h.channel.sent[1]?.content).toEqual({ markdown: '已开始新会话。' });
+    expect(h.catalog.activeFor(h.identity)).toBeUndefined();
+  });
+
   it('allows resume use only for the current agent/cwd/policy catalog entry', async () => {
     const h = await createHarness('claude');
     h.catalog.upsertActive({ ...h.identity, sessionId: 'sess-current', now: 1000 });

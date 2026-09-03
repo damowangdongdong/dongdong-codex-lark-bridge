@@ -3,6 +3,7 @@ import type { Block, FooterStatus, NoticeEntry, RunState, ToolEntry } from './ru
 import { toolHeaderText } from './tool-render';
 
 const REASONING_MAX = 1500;
+const RETRY_DETAILS_MAX = 4000;
 interface ToolGroup {
   kind: 'tools';
   tools: ToolEntry[];
@@ -19,7 +20,11 @@ interface NoticeGroup {
   kind: 'notice';
   notice: NoticeEntry;
 }
-type Group = ToolGroup | TextGroup | UserGroup | NoticeGroup;
+interface RetryGroup {
+  kind: 'retries';
+  notices: NoticeEntry[];
+}
+type Group = ToolGroup | TextGroup | UserGroup | NoticeGroup | RetryGroup;
 
 export interface RunCardRenderOptions {
   codexContext?: { profile?: string; sandbox: string };
@@ -50,12 +55,16 @@ export function renderCard(state: RunState, options: RunCardRenderOptions = {}):
       }));
     } else if (group.kind === 'notice') {
       elements.push(noticePanel(group.notice));
+    } else if (group.kind === 'retries') {
+      elements.push(retryPanel(group.notices));
     } else {
       elements.push(...renderToolGroup(group.tools, state.terminal !== 'running'));
     }
   }
 
-  if (state.terminal === 'interrupted') {
+  if (state.terminal === 'continued') {
+    elements.push(noteMd('_↘ 已在下方接续_'));
+  } else if (state.terminal === 'interrupted') {
     elements.push(noteMd('_⏹ 已被中断_'));
   } else if (state.terminal === 'idle_timeout') {
     const mins = state.idleTimeoutMinutes ?? 0;
@@ -92,6 +101,13 @@ function codexContextLine(
 }
 
 function* groupBlocks(blocks: Block[]): Generator<Group> {
+  const retryNotices = blocks
+    .filter((block): block is Extract<Block, { kind: 'notice' }> =>
+      block.kind === 'notice'
+      && (block.notice.level === 'retry' || block.notice.level === 'recovered')
+    )
+    .map((block) => block.notice);
+  let retriesEmitted = false;
   let toolBuf: ToolEntry[] = [];
   for (const b of blocks) {
     if (b.kind === 'tool') {
@@ -104,6 +120,13 @@ function* groupBlocks(blocks: Block[]): Generator<Group> {
       if (b.kind === 'user') {
         yield { kind: 'user', content: b.content };
       } else if (b.kind === 'notice') {
+        if (b.notice.level === 'retry' || b.notice.level === 'recovered') {
+          if (!retriesEmitted) {
+            retriesEmitted = true;
+            yield { kind: 'retries', notices: retryNotices };
+          }
+          continue;
+        }
         yield { kind: 'notice', notice: b.notice };
       } else {
         yield { kind: 'text', content: b.content };
@@ -111,6 +134,37 @@ function* groupBlocks(blocks: Block[]): Generator<Group> {
     }
   }
   if (toolBuf.length > 0) yield { kind: 'tools', tools: toolBuf };
+}
+
+function retryPanel(notices: NoticeEntry[]): object {
+  const retries = notices.filter((notice) => notice.level === 'retry');
+  const latest = notices.at(-1);
+  const recovered = latest?.level === 'recovered';
+  const latestRetry = [...notices].reverse().find((notice) => notice.level === 'retry');
+  const count = retries.length;
+  const title = recovered
+    ? `✅ **Codex 已恢复 · 本 turn 重试 ${count} 次**`
+    : `🔄 **Codex 正在重试${
+      latestRetry?.attempt !== undefined && latestRetry.maxAttempts !== undefined
+        ? ` ${latestRetry.attempt}/${latestRetry.maxAttempts}`
+        : ''
+    }${latestRetry?.delaySeconds !== undefined
+      ? ` · ${latestRetry.delaySeconds} 秒后继续`
+      : ''} · 本 turn 已记录 ${count} 次**`;
+  const body = notices.map((notice) => {
+    if (notice.level === 'recovered') return `✅ ${notice.message}`;
+    const attempt = notice.attempt !== undefined && notice.maxAttempts !== undefined
+      ? `${notice.attempt}/${notice.maxAttempts}`
+      : `第 ${retries.indexOf(notice) + 1} 次`;
+    const delay = notice.delaySeconds !== undefined ? ` · ${notice.delaySeconds} 秒后重试` : '';
+    return `🔄 **${attempt}**${delay}\n${notice.message}`;
+  }).join('\n\n');
+  return collapsiblePanel({
+    title,
+    expanded: false,
+    border: recovered ? 'grey' : 'blue',
+    body: truncate(body, RETRY_DETAILS_MAX),
+  });
 }
 
 function renderToolGroup(tools: ToolEntry[], finalized: boolean): object[] {
@@ -147,7 +201,7 @@ function noticePanel(notice: NoticeEntry): object {
     : '';
   return collapsiblePanel({
     title,
-    expanded: notice.level !== 'recovered',
+    expanded: notice.level !== 'retry' && notice.level !== 'recovered',
     border: notice.level === 'error' ? 'red' : notice.level === 'recovered' ? 'grey' : 'blue',
     body: `${notice.message}${delay}`,
   });
@@ -230,6 +284,7 @@ function footerStatus(status: Exclude<FooterStatus, null>): object {
 }
 
 function summaryText(state: RunState): string {
+  if (state.terminal === 'continued') return '已在下方接续';
   if (state.terminal === 'interrupted') return '已中断';
   if (state.terminal === 'idle_timeout') return '已超时';
   if (state.terminal === 'error') return '出错';

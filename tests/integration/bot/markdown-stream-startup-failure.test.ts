@@ -2,7 +2,7 @@ import type { NormalizedMessage } from '@larksuite/channel';
 import { realpath } from 'node:fs/promises';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { AgentEvent } from '../../../src/agent/types.js';
+import type { AgentAdapter, AgentEvent, AgentRun } from '../../../src/agent/types.js';
 import type { FakeAgentEvents } from '../../helpers/fake-agent.js';
 import { createDefaultProfileConfig } from '../../../src/config/profile-schema.js';
 import { log } from '../../../src/core/logger.js';
@@ -487,6 +487,106 @@ describe('markdown stream startup failures', () => {
 
     expect(updateCount).toBeGreaterThanOrEqual(2);
     expect(JSON.stringify(h.channel.sent.at(-1)?.content)).toContain('FINAL_AFTER_PATCH_FAILURE');
+  });
+
+  it('starts a new progress card below a message steered into the active Codex turn', async () => {
+    const initialProgressVisible = deferred<void>();
+    const continueRun = deferred<void>();
+    const streams: Array<{ options?: unknown; cards: unknown[] }> = [];
+    const steered: string[] = [];
+    const run: AgentRun = {
+      runId: 'run-split',
+      events: (async function* (): AsyncIterable<AgentEvent> {
+        yield { type: 'system', threadId: 'thread-split', cwd: '/repo' };
+        yield { type: 'user_text', content: 'initial request' };
+        yield {
+          type: 'notice', level: 'retry', message: 'FIRST_REQUEST_RETRY', attempt: 1, maxAttempts: 5,
+        };
+        yield { type: 'text', delta: 'BEFORE_STEER' };
+        initialProgressVisible.resolve();
+        await continueRun.promise;
+        yield { type: 'user_text', content: 'inserted request' };
+        yield {
+          type: 'notice', level: 'retry', message: 'SECOND_REQUEST_RETRY', attempt: 2, maxAttempts: 5,
+        };
+        yield { type: 'text', delta: 'AFTER_STEER' };
+        yield { type: 'final_text', content: 'FINAL_AFTER_STEER' };
+        yield { type: 'done', threadId: 'thread-split', terminationReason: 'normal' };
+      })(),
+      async steer(prompt) {
+        steered.push(prompt);
+      },
+      async stop() {},
+      async waitForExit() {
+        return true;
+      },
+    };
+    const agent: AgentAdapter = {
+      id: 'codex',
+      displayName: 'Codex',
+      async isAvailable() {
+        return true;
+      },
+      run() {
+        return run;
+      },
+    };
+    const h = await createHarness({
+      messageReply: 'card',
+      stream: async (_chatId, input, options) => {
+        const record = { options, cards: [] as unknown[] };
+        streams.push(record);
+        const card = (input as {
+          card?: {
+            initial?: unknown;
+            producer?: (ctrl: { update(next: unknown): Promise<void> }) => Promise<void>;
+          };
+        }).card;
+        if (card?.initial) record.cards.push(card.initial);
+        await card?.producer?.({
+          update: async (next) => {
+            record.cards.push(next);
+          },
+        });
+      },
+    });
+    const bridge = await startChannel({
+      cfg: h.profileConfig,
+      agent,
+      sessions: h.sessions,
+      workspaces: h.workspaces,
+      controls: h.controls,
+    });
+    cleanups.push(() => bridge.disconnect());
+
+    await h.channel.handlers.message?.(message('om_initial', 'initial request'));
+    await initialProgressVisible.promise;
+    await waitFor(() => streams.length === 1);
+
+    await h.channel.handlers.message?.(message('om_insert', 'inserted request'));
+    expect(steered).toHaveLength(1);
+    continueRun.resolve();
+
+    await waitFor(() => streams.length === 2);
+    await waitFor(() => JSON.stringify(h.channel.sent).includes('FINAL_AFTER_STEER'));
+
+    const first = JSON.stringify(streams[0]?.cards);
+    const second = JSON.stringify(streams[1]?.cards);
+    expect(first).toContain('BEFORE_STEER');
+    expect(first).toContain('FIRST_REQUEST_RETRY');
+    expect(first).toContain('本 turn 已记录 1 次');
+    expect(first).toContain('已在下方接续');
+    expect(first).not.toContain('AFTER_STEER');
+    expect(first).not.toContain('SECOND_REQUEST_RETRY');
+    expect(second).toContain('AFTER_STEER');
+    expect(second).toContain('SECOND_REQUEST_RETRY');
+    expect(second).toContain('本 turn 已记录 1 次');
+    expect(second).not.toContain('FIRST_REQUEST_RETRY');
+    expect(streams[1]?.options).toMatchObject({ replyTo: 'om_insert' });
+    const finalReply = h.channel.sent.find((entry) =>
+      JSON.stringify(entry.content).includes('FINAL_AFTER_STEER'),
+    );
+    expect(finalReply?.options).toMatchObject({ replyTo: 'om_insert' });
   });
 });
 

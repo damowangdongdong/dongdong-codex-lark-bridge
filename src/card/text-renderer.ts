@@ -20,7 +20,9 @@ export function renderText(state: RunState): string {
     if (piece) parts.push(piece);
   }
 
-  if (state.terminal === 'interrupted') {
+  if (state.terminal === 'continued') {
+    parts.push('_↘ 已在下方接续_');
+  } else if (state.terminal === 'interrupted') {
     parts.push('_⏹ 已被中断_');
   } else if (state.terminal === 'idle_timeout') {
     const mins = state.idleTimeoutMinutes ?? 0;

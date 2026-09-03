@@ -100,7 +100,7 @@ Cloud-doc comments are document-scoped：云文档评论按文档权限生效，
 | `/ws save` | `/ws save backend` | 把当前 cwd 保存为 `backend` 快捷方式；不会复制或移动文件。 |
 | `/ws use` | `/ws use backend` | 切换到 `backend` 指向的目录；Codex 会重新让你选择 profile 和新建/恢复。 |
 | `/ws remove` | `/ws remove backend` | 删除目录快捷方式，不删除磁盘文件。别名 `rm` 也可用。 |
-| `/new` | `/new` | 中断当前任务，清空当前私聊、群或话题的会话，下一条消息从全新会话开始。 |
+| `/new` | `/new` | 中断当前任务，清空当前私聊、群或话题的会话，下一条消息从全新会话开始；若存在旧 Codex thread，会先用单独一条消息报告其完整 ID。 |
 | `/clear` | `/clear` | `/new` 的同义命令。 |
 | `/reset` | `/reset` | `/new` 的同义命令。 |
 | `/resume` | `/resume 2` | 打开第 2 页历史会话；点选某项后恢复，再按卡片选择是否发送历史上下文。 |
@@ -163,7 +163,7 @@ Web 控制台的会议设置还包括：被邀请时自动入会、字幕保留�
 
 ## Codex CLI 命令覆盖
 
-Codex profile 使用常驻 `codex app-server`。运行卡只展示状态和折叠的工具记录，不再放置插入、排队或停止按钮。运行中直接 `@bot 内容` 会 steer 当前 turn；`/queue <指令>` 会排到下一轮；`/interupt`（`/interrupt`）等效 Codex CLI 的 Esc，打断当前 turn 并保留队列；`/stop` 则立即停止并清空排队消息。`/goal <目标>` 通过 app-server 更新持久目标，不打断当前 turn，也不清理队列。普通 turn 只发送运行卡和最终回复，不会额外重复发送完整轨迹；恢复历史后可通过选择卡按需发送聚合的历史上下文。发送 `/codex commands` 可以在飞书里随时查看当前版本（兼容 Codex 0.152.x）的清单。
+Codex profile 使用常驻 `codex app-server`。运行卡只展示状态和折叠的工具记录，不再放置插入、排队或停止按钮。运行中直接 `@bot 内容` 会 steer 当前 turn：旧流式卡会冻结并标记“已在下方接续”，新流式卡以这条插入消息为锚点继续；`/queue <指令>` 会排到下一轮；`/interupt`（`/interrupt`）等效 Codex CLI 的 Esc，打断当前 turn 并保留队列；`/stop` 则立即停止并清空排队消息。同一 turn、同一请求内的多次 Codex 重试会聚合为一个默认折叠面板，标题持续显示当前 attempt、等待时间和累计次数，不会跨 turn 合并。`/goal <目标>` 通过 app-server 更新持久目标，不打断当前 turn，也不清理队列。普通 turn 只发送运行卡和最终回复，不会额外重复发送完整轨迹；恢复历史后可通过选择卡按需发送聚合的历史上下文。发送 `/codex commands` 可以在飞书里随时查看当前版本（兼容 Codex 0.152.x）的清单。
 
 ### app-server 命令
 

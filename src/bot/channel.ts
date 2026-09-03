@@ -22,6 +22,7 @@ import { renderCard, type RunCardRenderOptions } from '../card/run-renderer';
 import {
   finalizeIfRunning,
   initialState,
+  markContinued,
   markIdleTimeout,
   markInterrupted,
   reduce,
@@ -314,6 +315,7 @@ export async function startChannel(deps: StartChannelDeps): Promise<BridgeChanne
         await runAgentBatch({
           channel,
           agent,
+          activeRuns,
           executor,
           sessions,
           sessionCatalog,
@@ -919,6 +921,10 @@ async function intakeMessage(deps: IntakeDeps): Promise<void> {
     if (active?.run.steer && emsg.resources.length === 0) {
       try {
         await active.run.steer(buildPrompt([emsg], [], [], [], channel.botIdentity));
+        activeRuns.requestPresentationSplit(scope, {
+          replyTo: emsg.messageId,
+          ...(chatMode === 'topic' ? { replyInThread: true } : {}),
+        });
         await channel.send(
           emsg.chatId,
           { markdown: '↵ 已立即插入当前 Codex turn。' },
@@ -942,6 +948,7 @@ async function intakeMessage(deps: IntakeDeps): Promise<void> {
 interface RunBatchDeps {
   channel: LarkChannel;
   agent: AgentAdapter;
+  activeRuns: ActiveRuns;
   executor: RunExecutor;
   sessions: SessionStore;
   sessionCatalog?: SessionCatalog;
@@ -960,6 +967,7 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
   const {
     channel,
     agent,
+    activeRuns,
     executor,
     sessions,
     sessionCatalog,
@@ -1288,45 +1296,91 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
 
     if (replyMode === 'card') {
       let latestState: RunState = initialState;
-      let producerStarted = false;
-      let cardCtrl:
-        | { update(next: object | ((current: object) => object)): Promise<void> }
-        | undefined;
-      const safeCardUpdate = createSafeProgressUpdate(
-        scope,
-        'card',
-        async (next: object): Promise<void> => {
-          if (cardCtrl) await cardCtrl.update(next);
-        },
-      );
-      const progress = createLazyProgressStream(scope, replyMode, () =>
-        channel.stream(
-          chatId,
-          {
-            card: {
-              initial: renderCard(initialState, cardRenderOptions),
-              producer: async (ctrl) => {
-                producerStarted = true;
-                if (progress.abandoned()) return;
-                cardCtrl = ctrl;
-                await safeCardUpdate(renderCard(filterForPrefs(latestState), cardRenderOptions));
-                await renderDone;
+      let renderDone!: Promise<RunState>;
+      interface CardProgressSegment {
+        state: RunState;
+        progress: LazyProgressStream;
+        producerStarted: boolean;
+        update(): Promise<void>;
+      }
+      const segments: CardProgressSegment[] = [];
+      const createSegment = (
+        segmentSendOpts: { replyTo: string; replyInThread?: boolean },
+      ): CardProgressSegment => {
+        let cardCtrl:
+          | { update(next: object | ((current: object) => object)): Promise<void> }
+          | undefined;
+        const segment = {} as CardProgressSegment;
+        const safeCardUpdate = createSafeProgressUpdate(
+          scope,
+          'card',
+          async (next: object): Promise<void> => {
+            if (cardCtrl) await cardCtrl.update(next);
+          },
+        );
+        const progress = createLazyProgressStream(scope, replyMode, () =>
+          channel.stream(
+            chatId,
+            {
+              card: {
+                initial: renderCard(filterForPrefs(segment.state), cardRenderOptions),
+                producer: async (ctrl) => {
+                  segment.producerStarted = true;
+                  if (progress.abandoned()) return;
+                  cardCtrl = ctrl;
+                  await segment.update();
+                  await renderDone;
+                },
               },
             },
+            segmentSendOpts,
+          ),
+        );
+        Object.assign(segment, {
+          state: initialState,
+          progress,
+          producerStarted: false,
+          update: async (): Promise<void> => {
+            await safeCardUpdate(renderCard(filterForPrefs(segment.state), cardRenderOptions));
           },
-          sendOpts,
-        ),
-      );
-      const renderDone = processAgentStream(
+        });
+        // Split streams are best-effort progress UI. Attach a rejection handler
+        // immediately so a later segment cannot create an unhandled rejection;
+        // the dedicated final reply remains authoritative.
+        void progress.settled.catch((err) => {
+          log.fail('stream', err, { mode: replyMode, step: 'split-progress-stream' });
+        });
+        segments.push(segment);
+        return segment;
+      };
+      let finalSendOpts = sendOpts;
+      let currentSegment = createSegment(sendOpts);
+      const progress = currentSegment.progress;
+      renderDone = processAgentStream(
         handle,
         eventStream,
         scope,
         idleTimeoutMs,
         recordSession,
-        async (state) => {
+        async (state, event) => {
           latestState = state;
-          if (shouldOpenProgressStream(filterForPrefs(state))) progress.ensureOpen();
-          await safeCardUpdate(renderCard(filterForPrefs(state), cardRenderOptions));
+          const split = event ? activeRuns.takePresentationSplit(scope) : undefined;
+          if (split) {
+            currentSegment.state = markContinued(currentSegment.state);
+            await currentSegment.update();
+            finalSendOpts = split;
+            currentSegment = createSegment(split);
+            log.info('outbound', 'progress-segment-split', {
+              scope,
+              mode: replyMode,
+              replyTo: split.replyTo,
+            });
+          }
+          currentSegment.state = advanceSegmentState(currentSegment.state, state, event);
+          if (shouldOpenProgressStream(filterForPrefs(currentSegment.state))) {
+            currentSegment.progress.ensureOpen();
+          }
+          await currentSegment.update();
         },
       );
       try {
@@ -1334,7 +1388,7 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
           mode: replyMode,
           progress,
           renderDone,
-          producerStarted: () => producerStarted,
+          producerStarted: () => segments[0]?.producerStarted === true,
           fallback: async (state) => {
             if (controls.profileConfig.agentKind === 'codex') return;
             if (renderText(filterForPrefs(state)).trim() === '') return;
@@ -1345,58 +1399,115 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
             );
           },
         });
+        await Promise.all(segments.slice(1).map((segment) =>
+          awaitRenderAwareStream({
+            mode: replyMode,
+            progress: segment.progress,
+            renderDone,
+            producerStarted: () => segment.producerStarted,
+            fallback: async () => {},
+          })
+        ));
       } catch (err) {
         if (controls.profileConfig.agentKind !== 'codex') throw err;
         log.fail('stream', err, { mode: replyMode, step: 'progress-stream' });
       }
-      await recallIfEmptyStreamedReply(channel, progress, filterForPrefs(latestState), scope);
+      await Promise.all(segments.map((segment) =>
+        recallIfEmptyStreamedReply(channel, segment.progress, filterForPrefs(segment.state), scope)
+      ));
       if (controls.profileConfig.agentKind === 'codex') {
+        const visibleProgress = segments.find((segment) =>
+          segment.progress.opened() && !segment.progress.abandoned()
+        )?.progress ?? progress;
         await sendFinalReply({
           channel,
           chatId,
           scope,
-          state: finalReplyState(progress, filterForPrefs(latestState)),
+          state: finalReplyState(visibleProgress, filterForPrefs(latestState)),
           replyMode,
-          sendOpts,
+          sendOpts: finalSendOpts,
           cardRenderOptions,
         });
       }
     } else if (replyMode === 'markdown') {
       let latestState: RunState = initialState;
-      let producerStarted = false;
-      let markdownCtrl: { setContent(markdown: string): Promise<void> } | undefined;
-      const safeMarkdownUpdate = createSafeProgressUpdate(
-        scope,
-        'markdown',
-        async (content: string): Promise<void> => {
-          if (markdownCtrl) await markdownCtrl.setContent(content);
-        },
-      );
-      const progress = createLazyProgressStream(scope, replyMode, () =>
-        channel.stream(
-          chatId,
-          {
-            markdown: async (ctrl) => {
-              producerStarted = true;
-              if (progress.abandoned()) return;
-              markdownCtrl = ctrl;
-              await safeMarkdownUpdate(renderText(filterForPrefs(latestState)));
-              await renderDone;
-            },
+      let renderDone!: Promise<RunState>;
+      interface MarkdownProgressSegment {
+        state: RunState;
+        progress: LazyProgressStream;
+        producerStarted: boolean;
+        update(): Promise<void>;
+      }
+      const segments: MarkdownProgressSegment[] = [];
+      const createSegment = (
+        segmentSendOpts: { replyTo: string; replyInThread?: boolean },
+      ): MarkdownProgressSegment => {
+        let markdownCtrl: { setContent(markdown: string): Promise<void> } | undefined;
+        const segment = {} as MarkdownProgressSegment;
+        const safeMarkdownUpdate = createSafeProgressUpdate(
+          scope,
+          'markdown',
+          async (content: string): Promise<void> => {
+            if (markdownCtrl) await markdownCtrl.setContent(content);
           },
-          sendOpts,
-        ),
-      );
-      const renderDone = processAgentStream(
+        );
+        const progress = createLazyProgressStream(scope, replyMode, () =>
+          channel.stream(
+            chatId,
+            {
+              markdown: async (ctrl) => {
+                segment.producerStarted = true;
+                if (progress.abandoned()) return;
+                markdownCtrl = ctrl;
+                await segment.update();
+                await renderDone;
+              },
+            },
+            segmentSendOpts,
+          ),
+        );
+        Object.assign(segment, {
+          state: initialState,
+          progress,
+          producerStarted: false,
+          update: async (): Promise<void> => {
+            await safeMarkdownUpdate(renderText(filterForPrefs(segment.state)));
+          },
+        });
+        void progress.settled.catch((err) => {
+          log.fail('stream', err, { mode: replyMode, step: 'split-progress-stream' });
+        });
+        segments.push(segment);
+        return segment;
+      };
+      let finalSendOpts = sendOpts;
+      let currentSegment = createSegment(sendOpts);
+      const progress = currentSegment.progress;
+      renderDone = processAgentStream(
         handle,
         eventStream,
         scope,
         idleTimeoutMs,
         recordSession,
-        async (state) => {
+        async (state, event) => {
           latestState = state;
-          if (shouldOpenProgressStream(filterForPrefs(state))) progress.ensureOpen();
-          await safeMarkdownUpdate(renderText(filterForPrefs(state)));
+          const split = event ? activeRuns.takePresentationSplit(scope) : undefined;
+          if (split) {
+            currentSegment.state = markContinued(currentSegment.state);
+            await currentSegment.update();
+            finalSendOpts = split;
+            currentSegment = createSegment(split);
+            log.info('outbound', 'progress-segment-split', {
+              scope,
+              mode: replyMode,
+              replyTo: split.replyTo,
+            });
+          }
+          currentSegment.state = advanceSegmentState(currentSegment.state, state, event);
+          if (shouldOpenProgressStream(filterForPrefs(currentSegment.state))) {
+            currentSegment.progress.ensureOpen();
+          }
+          await currentSegment.update();
         },
       );
       try {
@@ -1404,7 +1515,7 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
           mode: replyMode,
           progress,
           renderDone,
-          producerStarted: () => producerStarted,
+          producerStarted: () => segments[0]?.producerStarted === true,
           fallback: async (state) => {
             if (controls.profileConfig.agentKind === 'codex') return;
             const body = renderText(filterForPrefs(state));
@@ -1413,19 +1524,33 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
             }
           },
         });
+        await Promise.all(segments.slice(1).map((segment) =>
+          awaitRenderAwareStream({
+            mode: replyMode,
+            progress: segment.progress,
+            renderDone,
+            producerStarted: () => segment.producerStarted,
+            fallback: async () => {},
+          })
+        ));
       } catch (err) {
         if (controls.profileConfig.agentKind !== 'codex') throw err;
         log.fail('stream', err, { mode: replyMode, step: 'progress-stream' });
       }
-      await recallIfEmptyStreamedReply(channel, progress, filterForPrefs(latestState), scope);
+      await Promise.all(segments.map((segment) =>
+        recallIfEmptyStreamedReply(channel, segment.progress, filterForPrefs(segment.state), scope)
+      ));
       if (controls.profileConfig.agentKind === 'codex') {
+        const visibleProgress = segments.find((segment) =>
+          segment.progress.opened() && !segment.progress.abandoned()
+        )?.progress ?? progress;
         await sendFinalReply({
           channel,
           chatId,
           scope,
-          state: finalReplyState(progress, filterForPrefs(latestState)),
+          state: finalReplyState(visibleProgress, filterForPrefs(latestState)),
           replyMode,
-          sendOpts,
+          sendOpts: finalSendOpts,
           cardRenderOptions,
         });
       }
@@ -1742,6 +1867,31 @@ function createSafeProgressUpdate<T>(
 }
 
 /**
+ * Keep the backend run state authoritative while rendering only the events
+ * that belong to the current visual segment. Session/usage/terminal metadata
+ * remains shared; conversational blocks and reasoning restart after a steer.
+ */
+function advanceSegmentState(
+  segment: RunState,
+  aggregate: RunState,
+  event: AgentEvent | undefined,
+): RunState {
+  const next = event ? reduce(segment, event) : segment;
+  return {
+    ...next,
+    footer: aggregate.footer,
+    terminal: aggregate.terminal,
+    ...(aggregate.finalText !== undefined ? { finalText: aggregate.finalText } : {}),
+    ...(aggregate.errorMsg !== undefined ? { errorMsg: aggregate.errorMsg } : {}),
+    ...(aggregate.idleTimeoutMinutes !== undefined
+      ? { idleTimeoutMinutes: aggregate.idleTimeoutMinutes }
+      : {}),
+    ...(aggregate.session ? { session: aggregate.session } : {}),
+    ...(aggregate.usage ? { usage: aggregate.usage } : {}),
+  };
+}
+
+/**
  * Drive the agent's event stream into a stateful RunState, calling `flush`
  * on every state transition. Used by both card and markdown reply modes —
  * the only difference between the two is what `flush` does with the state.
@@ -1752,7 +1902,7 @@ async function processAgentStream(
   scope: string,
   idleTimeoutMs: number | undefined,
   recordSession: (event: AgentEvent) => void,
-  flush: (state: RunState) => Promise<void>,
+  flush: (state: RunState, event?: AgentEvent) => Promise<void>,
 ): Promise<RunState> {
   const runStart = Date.now();
   let state: RunState = initialState;
@@ -1834,7 +1984,7 @@ async function processAgentStream(
       if (state.footer !== prevFooter || state.terminal !== prevTerminal) {
         log.info('card', 'transition', { footer: state.footer, terminal: state.terminal });
       }
-      await flush(state);
+      await flush(state, evt);
       // Stop iterating as soon as we have a terminal state. Some claude
       // versions don't close stdout immediately after the result event, which
       // would leave the for-await waiting forever otherwise.

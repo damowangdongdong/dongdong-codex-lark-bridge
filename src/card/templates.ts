@@ -614,23 +614,24 @@ export function helpCard(agentName = 'Agent', botName?: string): object {
         : []),
     ]),
     tutorialPanel('🔁 会话、历史与 Codex 同步', [
-      '- `/new`、`/clear`、`/reset` — 清空当前 scope 的会话；下一条消息从新会话开始。',
+      '- `/new`、`/clear`、`/reset` — 清空当前 scope 的会话；下一条消息从新会话开始；Codex 有旧 thread 时会先单独报告完整 ID。',
       '- `/resume [N]` — 分页浏览历史会话并恢复；选择后会先展示可展开的完整历史。',
       '- `/status` — 一眼查看当前 profile、cwd、会话、权限、lark-cli 身份、运行和排队状态。',
       ...(codex
         ? [
             '- `/attach` — 生成精确的本机命令，把 Codex TUI 附着到当前 thread；飞书与终端共享输入、进度和最终回答。',
-            '- 运行中的 Codex：直接 @Bot 发送内容会插入当前 turn；发送 `/queue <指令>` 会排到下一轮。',
+            '- 运行中的 Codex：直接 @Bot 发送内容会插入当前 turn；旧流式卡会冻结，新流式卡从插入消息下方接续；发送 `/queue <指令>` 会排到下一轮。',
             '- `/interupt`（或 `/interrupt`）等效 Codex 的 Esc：打断当前 turn 并保留队列，让排队内容进入下一轮；没有队列时仅停止当前 turn。',
             '- `/stop` 立即停止当前 turn 并清空排队内容；`/stop terminals`、`/clean` 仍只处理后台终端。',
-            '- 每轮完成会发送分页的完整轨迹卡；reasoning、过程、工具输入/输出、附着终端输入和 token 用量分开展示。',
+            '- 同一 turn、同一请求的多次重试聚合在一个默认折叠面板中，标题显示当前 attempt、等待时间和累计次数；不同 turn 不合并。',
+            '- 普通 turn 只发送运行卡和最终回复，不重复发送完整轨迹；恢复历史可按需发送聚合的历史上下文。',
           ]
         : []),
     ]),
     tutorialPanel('🧾 Bridge 命令速查', [
       '- `/help` → 示例：`/help`；效果：重新打开这张教程卡。',
       '- `/status` → 示例：`/status`；效果：显示 profile、cwd、会话、权限、lark-cli 身份、运行和队列状态。',
-      '- `/new` → 示例：`/new`；效果：中断当前任务并清空当前 scope，会话从下一条消息重新开始。',
+      '- `/new` → 示例：`/new`；效果：中断当前任务并清空当前 scope；Codex 有旧 thread 时先单独报告完整 ID，会话从下一条消息重新开始。',
       '- `/clear` → 示例：`/clear`；效果：与 `/new` 相同，清空当前 scope 会话。',
       '- `/reset` → 示例：`/reset`；效果：与 `/new` 相同，清空当前 scope 会话。',
       '- `/cd <绝对路径>` → 示例：`/cd ~/project`；效果：切换 cwd，Codex 弹出 profile/新建或恢复卡，Claude 直接重置会话。',
@@ -675,7 +676,7 @@ export function helpCard(agentName = 'Agent', botName?: string): object {
       '- `/permission` → 示例：`/permission read-only`；效果：`/permissions` 的兼容别名。',
       '- `/clear` → 示例：`/clear`；效果：清空当前 Codex scope。',
       '- `/resume` → 示例：`/resume 1`；效果：浏览并恢复历史 thread。',
-      '- `/new` → 示例：`/new`；效果：创建新的 Codex thread。',
+      '- `/new` → 示例：`/new`；效果：先单独报告已有 thread 的完整 ID（如有），再创建新的 Codex thread。',
       '- `/status` → 示例：`/status`；效果：查看 Codex profile、thread、cwd、权限和运行状态。',
       '- `/profile` → 示例：`/profile`；效果：选择 Codex CLI profile。',
       '- `/apps` → 示例：`/apps`；效果：列出当前可用 Apps。',

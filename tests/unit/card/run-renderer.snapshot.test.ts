@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { renderCard } from '../../../src/card/run-renderer.js';
 import {
   initialState,
+  markContinued,
   markIdleTimeout,
   markInterrupted,
   reduce,
@@ -84,11 +85,71 @@ describe('run card renderer snapshots', () => {
     ])).toMatchSnapshot();
   });
 
+  it('groups all retry updates into one collapsed panel', () => {
+    const card = renderCard(stateFrom([
+      {
+        type: 'notice', level: 'retry', message: 'Retrying 1/5', attempt: 1, maxAttempts: 5,
+        delaySeconds: 1,
+      },
+      { type: 'text', delta: 'brief progress' },
+      {
+        type: 'notice', level: 'retry', message: 'Retrying 2/5', attempt: 2, maxAttempts: 5,
+        delaySeconds: 3,
+      },
+    ])) as { body: { elements: Array<Record<string, unknown>> } };
+    const retryPanels = card.body.elements.filter((element) =>
+      element.tag === 'collapsible_panel'
+      && JSON.stringify(element).includes('Codex 正在重试'),
+    );
+
+    expect(retryPanels).toHaveLength(1);
+    expect(retryPanels[0]).toMatchObject({ expanded: false });
+    const rendered = JSON.stringify(retryPanels[0]);
+    expect(rendered).toContain('Codex 正在重试 2/5 · 3 秒后继续 · 本 turn 已记录 2 次');
+    expect(rendered).toContain('Retrying 1/5');
+    expect(rendered).toContain('Retrying 2/5');
+  });
+
+  it('shows the retry count after the current turn recovers', () => {
+    const card = JSON.stringify(renderCard(stateFrom([
+      { type: 'notice', level: 'retry', message: 'Retrying 1/5', attempt: 1, maxAttempts: 5 },
+      { type: 'notice', level: 'retry', message: 'Retrying 2/5', attempt: 2, maxAttempts: 5 },
+      { type: 'notice', level: 'recovered', message: 'Codex recovered' },
+    ])));
+
+    expect(card).toContain('Codex 已恢复 · 本 turn 重试 2 次');
+    expect(card).toContain('"expanded":false');
+  });
+
+  it('keeps retry aggregation scoped to one turn state', () => {
+    const firstTurn = JSON.stringify(renderCard(stateFrom([
+      { type: 'notice', level: 'retry', message: 'FIRST_TURN_RETRY', attempt: 1, maxAttempts: 5 },
+      { type: 'notice', level: 'recovered', message: 'FIRST_TURN_RECOVERED' },
+    ])));
+    const secondTurn = JSON.stringify(renderCard(stateFrom([
+      { type: 'notice', level: 'retry', message: 'SECOND_TURN_RETRY', attempt: 1, maxAttempts: 5 },
+    ])));
+
+    expect(firstTurn).toContain('本 turn 重试 1 次');
+    expect(firstTurn).not.toContain('SECOND_TURN_RETRY');
+    expect(secondTurn).toContain('本 turn 已记录 1 次');
+    expect(secondTurn).not.toContain('FIRST_TURN_RETRY');
+  });
+
   it('renders done, error, interrupted, and idle-timeout terminal states', () => {
     expectCard(stateFrom([{ type: 'done', terminationReason: 'normal' }])).toMatchSnapshot();
     expectCard(stateFrom([{ type: 'error', message: 'process failed', terminationReason: 'failed' }])).toMatchSnapshot();
     expectCard(markInterrupted(stateFrom([{ type: 'text', delta: 'partial' }]))).toMatchSnapshot();
     expectCard(markIdleTimeout(stateFrom([{ type: 'text', delta: 'partial' }]), 15)).toMatchSnapshot();
+  });
+
+  it('marks a frozen progress segment as continued below', () => {
+    const continued = markContinued(stateFrom([{ type: 'text', delta: 'earlier progress' }]));
+    const card = JSON.stringify(renderCard(continued));
+
+    expect(card).toContain('earlier progress');
+    expect(card).toContain('已在下方接续');
+    expect(card).toContain('"streaming_mode":false');
   });
 
   it('renders markdown text mode without card-only controls', () => {

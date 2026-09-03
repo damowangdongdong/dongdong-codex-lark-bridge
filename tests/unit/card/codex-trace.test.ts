@@ -161,7 +161,7 @@ describe('Codex trace cards', () => {
     expect(history).toContain('旧卡片中的问题');
     expect(history).toContain('before');
     expect(history).toContain('after');
-    expect(history).toContain('show-card');
+    expect(history).not.toContain('show-card');
     expect(history).not.toContain('lark-channel-bridge 运行约定');
     expect(history).not.toContain('bridge_context');
     expect(history).not.toContain('bridge_instructions');
@@ -260,7 +260,7 @@ describe('Codex resumed-history cards', () => {
     }
   });
 
-  it('renders conversation messages together with command execution results', () => {
+  it('renders conversation messages without persisted tool calls', () => {
     const result = {
       thread: {
         id: 'thread-history',
@@ -289,10 +289,8 @@ describe('Codex resumed-history cards', () => {
     expect(rendered).toContain('-end');
     expect(rendered).not.toContain('considering options');
     expect(rendered).not.toContain('working update');
-    // Markdown escapes the underscore in the visible tool name.
-    expect(rendered).toContain('command\\\\_execution');
-    expect(rendered).toContain('pwd');
-    expect(rendered).toContain('/repo');
+    expect(rendered).not.toContain('command_execution');
+    expect(rendered).not.toContain('pwd');
     expect(rendered).toContain('thread-history');
     expect(rendered).toContain('"expanded":false');
     for (const card of cards) {
@@ -330,7 +328,32 @@ describe('Codex resumed-history cards', () => {
     expect(rendered).toContain('开始任务');
     expect(rendered).toContain('中断前最后进度');
     expect(rendered).not.toContain('较早进度');
-    expect(rendered).toContain('internal output');
+    expect(rendered).not.toContain('internal output');
+  });
+
+  it('keeps tool-heavy history in one compact conversation card', () => {
+    const items = [
+      { type: 'userMessage', content: [{ type: 'input_text', text: '帮我检查项目' }] },
+      ...Array.from({ length: 396 }, (_, index) => ({
+        type: 'commandExecution',
+        command: `command-${index}`,
+        aggregatedOutput: 'tool output that is intentionally hidden',
+      })),
+      { type: 'agentMessage', phase: 'final_answer', text: '检查完成。' },
+    ];
+    const cards = renderCodexHistoryCards({
+      thread: {
+        id: 'thread-tool-heavy',
+        turns: [{ status: 'completed', items }],
+      },
+    }, '/repo');
+
+    expect(cards).toHaveLength(1);
+    const rendered = JSON.stringify(cards);
+    expect(rendered).toContain('帮我检查项目');
+    expect(rendered).toContain('检查完成。');
+    expect(rendered).not.toContain('command-0');
+    expect(rendered).not.toContain('tool output that is intentionally hidden');
   });
 
   it('keeps retry and capacity errors visible in the full trace', () => {

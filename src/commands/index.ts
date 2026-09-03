@@ -394,6 +394,9 @@ async function handleNew(args: string, ctx: CommandContext): Promise<void> {
     return handleNewChat(rawName, ctx);
   }
 
+  const previousCodexThreadId = ctx.agent.id === 'codex'
+    ? await currentCodexThreadId(ctx)
+    : undefined;
   const wasRunning = ctx.activeRuns.interrupt(ctx.scope);
   if (ctx.sessionCatalog && ctx.sessionCatalogIdentity) {
     ctx.sessionCatalog.archiveActive({
@@ -402,6 +405,9 @@ async function handleNew(args: string, ctx: CommandContext): Promise<void> {
     });
   }
   ctx.sessions.clear(ctx.scope);
+  if (previousCodexThreadId) {
+    await reply(ctx, `上一个 Codex 会话 ID：\`${previousCodexThreadId}\``);
+  }
   await reply(ctx, wasRunning ? '已中断当前任务并开始新会话。' : '已开始新会话。');
 }
 
@@ -449,6 +455,10 @@ async function handleCodexControl(args: string, ctx: CommandContext): Promise<vo
       return;
     }
     await active.run.steer(input);
+    ctx.activeRuns.requestPresentationSplit(ctx.scope, {
+      replyTo: ctx.msg.messageId,
+      ...(ctx.chatMode === 'topic' ? { replyInThread: true } : {}),
+    });
     await reply(ctx, '↵ 已立即插入当前 Codex turn。');
     return;
   }

@@ -25,7 +25,7 @@ export type Block =
   | { kind: 'tool'; tool: ToolEntry };
 
 export type FooterStatus = 'thinking' | 'tool_running' | 'streaming' | null;
-export type Terminal = 'running' | 'done' | 'interrupted' | 'error' | 'idle_timeout';
+export type Terminal = 'running' | 'continued' | 'done' | 'interrupted' | 'error' | 'idle_timeout';
 
 export interface RunState {
   blocks: Block[];
@@ -221,6 +221,17 @@ export function markInterrupted(state: RunState): RunState {
     blocks: closeStreamingText(state.blocks),
     reasoning: { ...state.reasoning, active: false },
     terminal: 'interrupted',
+    footer: null,
+  };
+}
+
+/** Freeze one visual segment when a steered Codex turn continues below it. */
+export function markContinued(state: RunState): RunState {
+  return {
+    ...state,
+    blocks: closeStreamingText(state.blocks),
+    reasoning: { ...state.reasoning, active: false },
+    terminal: 'continued',
     footer: null,
   };
 }

@@ -3,6 +3,16 @@ import type { AgentRun } from '../agent/types';
 export interface RunHandle {
   run: AgentRun;
   interrupted: boolean;
+  /**
+   * A successful Codex steer keeps the same backend turn alive, but its next
+   * visible output should start in a fresh Lark message below the inserted
+   * user message. Only the newest request matters when several steers arrive
+   * before the event stream advances.
+   */
+  presentationSplit?: {
+    replyTo: string;
+    replyInThread?: boolean;
+  };
 }
 
 export class ActiveRuns {
@@ -54,6 +64,23 @@ export class ActiveRuns {
 
   get(chatId: string): RunHandle | undefined {
     return this.handles.get(chatId);
+  }
+
+  requestPresentationSplit(
+    chatId: string,
+    split: NonNullable<RunHandle['presentationSplit']>,
+  ): boolean {
+    const handle = this.handles.get(chatId);
+    if (!handle) return false;
+    handle.presentationSplit = split;
+    return true;
+  }
+
+  takePresentationSplit(chatId: string): RunHandle['presentationSplit'] {
+    const handle = this.handles.get(chatId);
+    const split = handle?.presentationSplit;
+    if (handle) handle.presentationSplit = undefined;
+    return split;
   }
 
   unregister(chatId: string, run: AgentRun): void {
