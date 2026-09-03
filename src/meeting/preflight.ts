@@ -41,6 +41,8 @@ export const MEETING_REQUIRED_EVENTS = [
   'vc.bot.meeting_ended_v1',
 ];
 
+const PREFLIGHT_TIMEOUT_MS = 5 * 60_000;
+
 export type MeetingPreflightStatus =
   | 'ok'
   /** App-level scope missing — fixable via `consoleUrl`. */
@@ -90,7 +92,7 @@ const defaultExec: PreflightExec = (args, env) =>
     });
     child.stdout?.on('data', (b: Buffer) => (stdout += b.toString('utf8')));
     child.stderr?.on('data', (b: Buffer) => (stderr += b.toString('utf8')));
-    const timer = setTimeout(() => child.kill('SIGTERM'), 20_000);
+    const timer = setTimeout(() => child.kill('SIGTERM'), PREFLIGHT_TIMEOUT_MS);
     child.once('error', (err) => {
       clearTimeout(timer);
       resolve({ code: null, stdout, stderr: stderr || String(err) });

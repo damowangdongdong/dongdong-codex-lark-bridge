@@ -40,7 +40,7 @@ interface PendingRequest {
   reject(error: Error): void;
 }
 
-const DEFAULT_CONNECT_TIMEOUT_MS = 8_000;
+const DEFAULT_CONNECT_TIMEOUT_MS = 5 * 60_000;
 
 export class CodexAppServerClient {
   private readonly options: CodexAppServerClientOptions;

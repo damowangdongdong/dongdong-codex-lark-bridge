@@ -46,6 +46,8 @@ export interface CheckAgentVersionInput {
   timeoutMs?: number;
 }
 
+const DEFAULT_VERSION_CHECK_TIMEOUT_MS = 5 * 60_000;
+
 export class AgentPreflightError extends Error {
   readonly diagnostic: AgentPreflightDiagnostic;
 
@@ -71,7 +73,7 @@ export async function checkAgentAvailability(
 
 export async function checkAgentVersion(input: CheckAgentVersionInput): Promise<string> {
   const args = input.args ?? ['--version'];
-  const timeoutMs = input.timeoutMs ?? 5000;
+  const timeoutMs = input.timeoutMs ?? DEFAULT_VERSION_CHECK_TIMEOUT_MS;
   const executable = input.realpath ?? input.binaryPath;
 
   return new Promise((resolve, reject) => {

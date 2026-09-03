@@ -733,6 +733,7 @@ function MyChatsPane({ profile, open, added, onPick }: {
   // A chat we couldn't add yet because the add-member scope was missing; retried
   // after the user grants it. Also drives the authorize-prompt wording.
   const [pendingPull, setPendingPull] = useState<string | null>(null);
+  const [appPermissionUrl, setAppPermissionUrl] = useState<string | null>(null);
   const addedSet = new Set(added);
 
   const canList = Boolean(status?.loggedIn && status?.scopes.includes("im:chat:read"));
@@ -766,6 +767,7 @@ function MyChatsPane({ profile, open, added, onPick }: {
     if (!open) return;
     setChats(null); setNextToken(undefined); setQuery("");
     setLogin(null); setError(null); setStatus(null); setPendingPull(null);
+    setAppPermissionUrl(null);
     void loadStatus().then((s) => {
       if (s?.loggedIn && s.scopes.includes("im:chat:read")) void fetchChats(true);
     });
@@ -785,8 +787,12 @@ function MyChatsPane({ profile, open, added, onPick }: {
     if (!login) return;
     setBusy(true);
     try {
-      await apiPost("/api/auth/login/complete", { profile, deviceCode: login.deviceCode });
+      const result = await apiPost<{ ok: boolean; appPermissionUrl?: string }>(
+        "/api/auth/login/complete",
+        { profile, deviceCode: login.deviceCode },
+      );
       setLogin(null);
+      setAppPermissionUrl(result.appPermissionUrl ?? null);
       toast.success("授权成功");
       const s = await loadStatus();
       const pull = pendingPull;
@@ -871,6 +877,20 @@ function MyChatsPane({ profile, open, added, onPick }: {
 
   return (
     <div className="space-y-2 py-2">
+      {appPermissionUrl && (
+        <div className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950">
+          <p className="font-medium">用户登录不会自动提升机器人应用权限。</p>
+          <p className="mt-1">如启动或建群提示权限不足，请在飞书开发者后台开通应用权限：</p>
+          <a
+            href={appPermissionUrl}
+            target="_blank"
+            rel="noreferrer"
+            className="mt-1 block break-all text-primary underline"
+          >
+            打开应用权限页
+          </a>
+        </div>
+      )}
       {status?.userName && <p className="text-xs text-muted-foreground">已授权：{status.userName}</p>}
       <div className="flex gap-2">
         <Input

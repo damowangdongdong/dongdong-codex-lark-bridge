@@ -174,7 +174,7 @@ export function describeService(profile: string): string {
 
 /** systemctl stop is synchronous (waits for exit) but we keep parity with
  * launchd's waitUntilUnloaded so service.ts can call it uniformly. */
-export async function waitUntilInactive(profile: string, timeoutMs = 5000): Promise<boolean> {
+export async function waitUntilInactive(profile: string, timeoutMs = 5 * 60_000): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (!isActive(profile)) return true;

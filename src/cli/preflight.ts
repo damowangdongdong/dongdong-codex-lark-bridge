@@ -25,7 +25,7 @@ import { mergeProcessEnv, spawnProcess, spawnProcessSync } from '../platform/spa
 import { writeFileAtomic } from '../platform/atomic-write';
 
 const INSTALL_TIMEOUT_MS = 5 * 60 * 1000;
-const BIND_TIMEOUT_MS = 30 * 1000;
+const BIND_TIMEOUT_MS = 5 * 60 * 1000;
 
 const BOLD = '\x1b[1m';
 const RESET = '\x1b[0m';

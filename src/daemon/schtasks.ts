@@ -178,7 +178,7 @@ export function describeTask(profile: string): string {
   return r.stdout || r.stderr || '';
 }
 
-export async function waitUntilStopped(profile: string, timeoutMs = 5000): Promise<boolean> {
+export async function waitUntilStopped(profile: string, timeoutMs = 5 * 60_000): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (!isTaskRunning(profile)) return true;

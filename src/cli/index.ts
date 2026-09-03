@@ -157,7 +157,7 @@ program
 
 program
   .command('kill <target>')
-  .description('Kill a running bridge process by short id or list index (SIGTERM, then SIGKILL after 2s). Was `stop <target>` in older versions.')
+  .description('Kill a running bridge process by short id or list index (SIGTERM, then SIGKILL after the five-minute grace window). Was `stop <target>` in older versions.')
   .action(async (target: string) => {
     await runKillCli(target);
   });

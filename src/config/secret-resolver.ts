@@ -27,7 +27,7 @@ const ENV_TEMPLATE_RE = /^\$\{([A-Z][A-Z0-9_]{0,127})\}$/;
 
 const DEFAULT_PROVIDER = 'default';
 
-const DEFAULT_EXEC_TIMEOUT_MS = 5_000;
+const DEFAULT_EXEC_TIMEOUT_MS = 5 * 60_000;
 const DEFAULT_EXEC_MAX_OUTPUT = 64 * 1024;
 
 export async function resolveAppSecret(

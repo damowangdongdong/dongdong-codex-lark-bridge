@@ -60,6 +60,8 @@ export interface AddBotResult {
 export const LIST_CHAT_SCOPES = ['im:chat:read'];
 export const ADD_BOT_SCOPES = ['im:chat.members:write_only'];
 
+const LARK_CLI_TIMEOUT_MS = 5 * 60_000;
+
 interface ExecResult {
   code: number | null;
   stdout: string;
@@ -165,7 +167,7 @@ export async function getUserAuthStatus(
   ctx: UserImContext,
   exec: LarkCliExec = defaultExec,
 ): Promise<UserAuthStatus> {
-  const r = await exec(['auth', 'status', '--json'], larkCliEnv(ctx), 15_000);
+  const r = await exec(['auth', 'status', '--json'], larkCliEnv(ctx), LARK_CLI_TIMEOUT_MS);
   const json = parseJson(r.stdout);
   const user = isRecord(json) && isRecord(json.identities) ? json.identities.user : undefined;
   if (!isRecord(user)) return { loggedIn: false, scopes: [] };
@@ -199,7 +201,7 @@ export async function startDeviceLogin(
   const r = await exec(
     ['auth', 'login', '--no-wait', '--json', '--scope', scopes.join(' ')],
     larkCliEnv(ctx),
-    30_000,
+    LARK_CLI_TIMEOUT_MS,
   );
   const json = parseJson(r.stdout);
   // Prefer the known device-flow field names (both snake_case and camelCase),
@@ -242,7 +244,7 @@ export async function completeDeviceLogin(
   const r = await exec(
     ['auth', 'login', '--device-code', deviceCode, '--json'],
     larkCliEnv(ctx),
-    30_000,
+    LARK_CLI_TIMEOUT_MS,
   );
   if (r.code === 0) return { ok: true };
   const json = parseJson(r.stdout);
@@ -307,7 +309,7 @@ export async function listUserChats(
     String(opts.pageSize ?? DEFAULT_PAGE_SIZE),
   ];
   if (opts.pageToken) args.push('--page-token', opts.pageToken);
-  return parseChatsPage(await exec(args, larkCliEnv(ctx), 30_000), '列出群失败');
+  return parseChatsPage(await exec(args, larkCliEnv(ctx), LARK_CLI_TIMEOUT_MS), '列出群失败');
 }
 
 /** Search the user's visible groups by name (one page). */
@@ -328,7 +330,7 @@ export async function searchUserChats(
     String(opts.pageSize ?? DEFAULT_PAGE_SIZE),
   ];
   if (opts.pageToken) args.push('--page-token', opts.pageToken);
-  return parseChatsPage(await exec(args, larkCliEnv(ctx), 30_000), '搜索群失败');
+  return parseChatsPage(await exec(args, larkCliEnv(ctx), LARK_CLI_TIMEOUT_MS), '搜索群失败');
 }
 
 export async function addBotToChat(
@@ -353,7 +355,7 @@ export async function addBotToChat(
       '--json',
     ],
     larkCliEnv(ctx),
-    30_000,
+    LARK_CLI_TIMEOUT_MS,
   );
   const json = parseJson(r.stdout);
   const data = isRecord(json) && isRecord(json.data) ? json.data : isRecord(json) ? json : {};

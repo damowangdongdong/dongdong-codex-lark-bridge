@@ -2,7 +2,7 @@ import type { LarkChannelOptions } from '@larksuite/channel';
 import { defaultHttpInstance } from '@larksuiteoapi/node-sdk';
 import { HttpsProxyAgent } from 'https-proxy-agent';
 
-const HTTP_TIMEOUT_MS = 30_000;
+const HTTP_TIMEOUT_MS = 5 * 60_000;
 
 type TransportOptions = Pick<
   LarkChannelOptions,

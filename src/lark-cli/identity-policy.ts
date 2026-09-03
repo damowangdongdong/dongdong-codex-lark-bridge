@@ -2,7 +2,7 @@ import { buildLarkChannelEnv, type LarkChannelEnvContext } from '../agent/lark-c
 import { mergeProcessEnv, spawnProcess } from '../platform/spawn';
 import type { LarkCliIdentityPreset } from '../config/profile-schema';
 
-const POLICY_TIMEOUT_MS = 30_000;
+const POLICY_TIMEOUT_MS = 5 * 60_000;
 const USER_OPEN_ID_KEYS = ['userOpenId', 'openId', 'user_open_id', 'open_id'];
 
 export function hasLarkCliUserAuth(users: unknown): boolean {

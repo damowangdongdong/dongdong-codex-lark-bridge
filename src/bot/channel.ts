@@ -258,13 +258,14 @@ export async function startChannel(deps: StartChannelDeps): Promise<BridgeChanne
     },
     // SDK 1.65.0-alpha.3+ knobs.
     wsConfig: {
-      // 3s liveness watchdog: if no inbound message arrives within 3s after
-      // the last ping, SDK presumes connection dead and forces a reconnect.
-      pingTimeout: 3,
+      // Five-minute liveness watchdog: if no inbound message arrives within
+      // five minutes after the last ping, SDK presumes connection dead and
+      // forces a reconnect. Feishu connections can be slow while a machine
+      // or proxy is waking up, so a short watchdog causes false disconnects.
+      pingTimeout: 5 * 60,
     },
-    // 8s handshake timeout (replaces hardcoded 15s). Fast-fail + fast-retry
-    // beats slow-fail in unstable networks.
-    handshakeTimeoutMs: 8_000,
+    // Allow up to five minutes for the initial WebSocket handshake.
+    handshakeTimeoutMs: 5 * 60_000,
     // Route WS + REST through HTTPS_PROXY / HTTP_PROXY when set. The helper
     // also prevents Axios from applying the same proxy a second time.
     ...buildProxyAwareTransportOptions(),
@@ -518,7 +519,7 @@ export async function startChannel(deps: StartChannelDeps): Promise<BridgeChanne
   });
   console.log('正在监听消息。按 Ctrl+C 退出。\n');
 
-  // App-level keepalive: 15s probe + wake-up detection + HTTP reachability.
+  // App-level keepalive: 15s check + wake-up detection + HTTP reachability.
   // Defense-in-depth — the SDK's pingTimeout watchdog handles half-dead WS,
   // this catches anything that the SDK misses (silent state stuck, etc.).
   const probeDomain =

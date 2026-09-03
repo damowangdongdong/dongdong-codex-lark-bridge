@@ -105,7 +105,7 @@ export type StopProcessEntryResult = 'terminated' | 'killed';
 
 export async function stopProcessEntry(
   entry: Pick<ProcessEntry, 'pid'> & { id?: string },
-  timeoutMs = 2000,
+  timeoutMs = 5 * 60_000,
 ): Promise<StopProcessEntryResult> {
   process.kill(entry.pid, 'SIGTERM');
 

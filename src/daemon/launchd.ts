@@ -168,7 +168,7 @@ export function isLoaded(profile: string): boolean {
  * cryptic `Bootstrap failed: 5: Input/output error`. Poll until the
  * service is truly gone.
  */
-export async function waitUntilUnloaded(profile: string, timeoutMs = 5000): Promise<boolean> {
+export async function waitUntilUnloaded(profile: string, timeoutMs = 5 * 60_000): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (!isLoaded(profile)) return true;

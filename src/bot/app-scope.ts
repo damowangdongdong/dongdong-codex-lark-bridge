@@ -23,7 +23,7 @@ export const PROJECT_CHAT_MEMBER_SCOPE_ALTERNATIVES = [
   'im:chat.members:read',
 ] as const;
 
-function appScopeConsoleUrl(appId: string): string {
+export function appScopeConsoleUrl(appId: string): string {
   const scopes = [...new Set([
     PROJECT_CHAT_CREATE_SCOPE,
     ...PROJECT_CHAT_MEMBER_SCOPE_ALTERNATIVES,
@@ -85,7 +85,8 @@ export async function requireProjectChatScopes(
   const scopes = await fetchGrantedScopes(channel, appId);
   if (scopes === null) {
     throw new Error(
-      `无法确认飞书应用身份权限（app ${appId}）。请在开发者后台开通项目群所需权限后重启 bridge。`,
+      `无法确认飞书应用身份权限（app ${appId}）。机器人应用权限不能由 bridge 或 lark-cli auth login 自动提权，` +
+      `请在飞书开发者后台开通项目群所需权限后重启 bridge：${appScopeConsoleUrl(appId)}`,
     );
   }
 
@@ -98,7 +99,8 @@ export async function requireProjectChatScopes(
   }
   if (missing.length > 0) {
     throw new Error(
-      `飞书应用身份权限未开通：${missing.join('；')}。请在开发者后台为 app ${appId} 开通后重启 bridge：${appScopeConsoleUrl(appId)}`,
+      `飞书应用身份权限未开通：${missing.join('；')}。机器人应用权限不能由 bridge 或 lark-cli auth login 自动提权，` +
+      `请在飞书开发者后台为 app ${appId} 开通后重启 bridge：${appScopeConsoleUrl(appId)}`,
     );
   }
 }

@@ -33,6 +33,7 @@ import {
   resumeTakeoverCard,
   statusCard,
   workspaceLaunchCard,
+  workspaceNewCard,
   workspacesCard,
 } from '../card/templates';
 import type { AppConfig, AppPreferences, MessageReplyMode, TenantBrand } from '../config/schema';
@@ -1278,6 +1279,10 @@ async function handleWs(args: string, ctx: CommandContext): Promise<void> {
       return handleWsUse(name, ctx);
     case 'launch':
       return handleWorkspaceLaunch(name, ctx);
+    case 'new':
+      return handleWorkspaceQuickLaunch('new', ctx);
+    case 'resume':
+      return handleWorkspaceQuickLaunch('resume', ctx);
     case 'remove':
     case 'rm':
       return handleWsRemove(name, ctx);
@@ -1365,6 +1370,42 @@ async function showWorkspaceLaunchCard(
   });
 }
 
+/** Run one of the quick actions rendered below the workspace/resume cards. */
+async function handleWorkspaceQuickLaunch(
+  mode: 'new' | 'resume',
+  ctx: CommandContext,
+): Promise<void> {
+  if (ctx.agent.id !== 'codex') return;
+  const cwd = ctx.workspaces.pendingCodexCwdFor(ctx.scope) ?? effectiveWorkspaceCwd(ctx);
+  if (!cwd) {
+    await reply(ctx, '当前工作目录不存在，请重新使用 `/cd <path>`。');
+    return;
+  }
+  const selectedProfile = typeof ctx.formValue?.codex_profile === 'string'
+    ? ctx.formValue.codex_profile.trim()
+    : '';
+  const profile = selectedProfile
+    ? selectedProfile === '__default__'
+      ? null
+      : selectedProfile
+    : ctx.workspaces.codexProfileFor(
+        ctx.scope,
+        ctx.controls.profileConfig.codex?.profile,
+      ) ?? null;
+  const projectChatName = typeof ctx.formValue?.project_chat_name === 'string'
+    ? ctx.formValue.project_chat_name.trim()
+    : '';
+  await handleWorkspaceLaunch('', {
+    ...ctx,
+    formValue: {
+      ...(ctx.formValue ?? {}),
+      codex_profile: profile ?? '__default__',
+      launch_mode: mode,
+      ...(projectChatName ? { project_chat_name: projectChatName } : {}),
+    },
+  });
+}
+
 async function discoverCommandCodexProfiles(
   ctx: CommandContext,
   cwd: string,
@@ -1405,6 +1446,7 @@ async function handleWorkspaceLaunch(args: string, ctx: CommandContext): Promise
   if (!project) return;
 
   let launchCtx = ctx;
+  let projectAck: string | undefined;
   if (project.chatId !== ctx.msg.chatId || ctx.chatMode === 'topic') {
     const existing = ctx.workspaces.selectionFor(project.chatId);
     if (existing) ctx.workspaces.setCwd(project.chatId, cwd);
@@ -1433,10 +1475,7 @@ async function handleWorkspaceLaunch(args: string, ctx: CommandContext): Promise
       return;
     }
     launchCtx = projectCommandContext(ctx, project.chatId, anchor.messageId);
-    await reply(
-      ctx,
-      `${project.created ? '✓ 已创建' : '✓ 已复用'}路径对应的项目群 **${project.name}**，请去该群继续。`,
-    );
+    projectAck = `${project.created ? '✓ 已创建' : '✓ 已复用'}路径对应的项目群 **${project.name}**，请去该群继续。`;
   } else {
     ctx.workspaces.setCodexLaunch(ctx.scope, profile, rawMode);
   }
@@ -1449,14 +1488,33 @@ async function handleWorkspaceLaunch(args: string, ctx: CommandContext): Promise
       launchCtx.sessionCatalog.archiveActive({ ...identity, now: Date.now() });
     }
     launchCtx.sessions.clear(launchCtx.scope);
+    await launchCtx.channel.send(
+      launchCtx.msg.chatId,
+      {
+        card: workspaceNewCard({
+          cwd,
+          profile: formatCodexProfile(profile),
+        }),
+      },
+      commandReplyOptions(launchCtx),
+    ).catch((err) => {
+      log.warn('command', 'workspace-new-card-send-failed', {
+        cwd,
+        scope: launchCtx.scope,
+        message: errorMessage(err),
+      });
+    });
     if (launchCtx === ctx) {
       await reply(
         ctx,
         `✓ 已选择 ${formatCodexProfile(profile)}，下一条消息将创建新会话。`,
       );
+    } else if (projectAck) {
+      await reply(ctx, projectAck);
     }
     return;
   }
+  if (projectAck) await reply(ctx, projectAck);
   await handleResume('', launchCtx);
 }
 
@@ -1794,22 +1852,38 @@ async function handleResume(args: string, ctx: CommandContext): Promise<void> {
           preview: thread.name || thread.preview,
           relTime: formatRelTime(thread.updatedAtMs),
           detail: `Codex · ${thread.source}`,
+          copyableId: true,
           current: thread.threadId === entry?.threadId,
         };
       });
-      const card = resumeCard(cwd, entries);
+      const card = resumeCard(cwd, entries, { showNewCodexAction: true });
       await ctx.channel.send(ctx.msg.chatId, { card }, commandReplyOptions(ctx));
       return;
     }
     if (entry?.threadId && identity) {
       const nonce = issueResumeCandidate(identity, { threadId: entry.threadId });
+      await ctx.channel.send(
+        ctx.msg.chatId,
+        {
+          card: resumeCard(cwd, [{
+            sessionId: nonce,
+            displayId: entry.threadId,
+            preview: '当前 Codex 会话',
+            relTime: '当前',
+            detail: 'Codex · 当前会话',
+            copyableId: true,
+            current: true,
+          }], { showNewCodexAction: true }),
+        },
+        commandReplyOptions(ctx),
+      );
       await reply(
         ctx,
         `当前 Codex thread 可恢复。\n使用 \`/resume use ${nonce}\` 恢复（10 分钟内有效）。`,
       );
       return;
     }
-    const card = resumeCard(cwd, []);
+    const card = resumeCard(cwd, [], { showNewCodexAction: true });
     await ctx.channel.send(ctx.msg.chatId, { card }, commandReplyOptions(ctx));
     return;
   }
@@ -2142,7 +2216,9 @@ async function listCodexResumeHistory(
 }
 
 function effectiveWorkspaceCwd(ctx: CommandContext): string | undefined {
-  return ctx.workspaces.cwdFor(ctx.scope) ?? ctx.controls.profileConfig.workspaces.default;
+  return ctx.workspaces.pendingCodexCwdFor(ctx.scope)
+    ?? ctx.workspaces.cwdFor(ctx.scope)
+    ?? ctx.controls.profileConfig.workspaces.default;
 }
 
 function selectedResumeCwd(ctx: CommandContext): string | undefined {

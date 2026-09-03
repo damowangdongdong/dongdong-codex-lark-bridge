@@ -14,6 +14,7 @@ import {
 import { isMeetingNo } from '../meeting/api';
 import { checkMeetingPreflight, type MeetingPreflight } from '../meeting/preflight';
 import { describeMeetingError, type MeetingManager, type MeetingPushHealth } from '../meeting/manager';
+import { appScopeConsoleUrl } from '../bot/app-scope';
 import type { MeetingSessionStatus } from '../meeting/session';
 import { resolveAppPaths } from '../config/app-paths';
 import { loadRootConfig, runtimeProfileConfig } from '../config/profile-store';
@@ -529,7 +530,18 @@ export async function userLoginComplete(profile: string, rootDir: string | undef
   if (!deviceCode) throw new ApiError(400, 'deviceCode is required');
   const r = await completeDeviceLogin({ profile, rootDir }, deviceCode);
   if (!r.ok) throw new ApiError(400, r.message ?? '授权尚未完成');
-  return { ok: true };
+  // User OAuth cannot elevate the bot application's tenant scopes. Return the
+  // developer-console URL alongside the successful login so the UI can make
+  // that separate, required step explicit.
+  let appPermissionUrl: string | undefined;
+  try {
+    const state = await loadProfileState(profile, rootDir);
+    const appId = state.profileConfig.accounts.app.id;
+    if (appId) appPermissionUrl = appScopeConsoleUrl(appId);
+  } catch (err) {
+    log.warn('ui-auth', 'app-scope-link-failed', { profile, err: String(err) });
+  }
+  return { ok: true, ...(appPermissionUrl ? { appPermissionUrl } : {}) };
 }
 
 export interface UserChatView {

@@ -14,8 +14,8 @@ const COT_TOOL_OUTPUT_MAX = 1200;
 const COT_TEXT_MAX = 1200;
 // Bounds every CoT HTTP call. Without it a hung message_cot endpoint pins
 // start() — which runs before any agent event is drained and before the
-// plain-reply fallback — to undici's ~300s default.
-const COT_REQUEST_TIMEOUT_MS = 15_000;
+// plain-reply fallback — beyond the five-minute operation window.
+const COT_REQUEST_TIMEOUT_MS = 5 * 60_000;
 
 export class CotClient {
   private readonly baseUrl: string;

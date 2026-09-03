@@ -14,14 +14,14 @@ describe('buildProxyAwareTransportOptions', () => {
     expect(defaultHttpInstance.defaults.httpAgent).toBe(options.agent);
     expect(defaultHttpInstance.defaults.httpsAgent).toBe(options.agent);
     expect(defaultHttpInstance.defaults.proxy).toBe(false);
-    expect(defaultHttpInstance.defaults.timeout).toBe(30_000);
+    expect(defaultHttpInstance.defaults.timeout).toBe(5 * 60_000);
   });
 
   it('keeps the channel default path when no proxy is configured', () => {
     const options = buildProxyAwareTransportOptions({});
 
     expect(options).toEqual({
-      httpTimeoutMs: 30_000,
+      httpTimeoutMs: 5 * 60_000,
       respectProxyEnv: true,
     });
   });

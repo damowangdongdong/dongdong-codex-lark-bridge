@@ -207,8 +207,37 @@ export function workspaceLaunchCard(options: WorkspaceLaunchCardOptions): object
           form_action_type: 'submit',
           behaviors: [{ type: 'callback', value: { cmd: 'ws.launch' } }],
         },
+        {
+          tag: 'button',
+          name: 'resume_btn',
+          text: { tag: 'plain_text', content: '🔁 恢复历史会话' },
+          form_action_type: 'submit',
+          behaviors: [{ type: 'callback', value: { cmd: 'ws.resume' } }],
+        },
       ],
     },
+  ]);
+}
+
+export interface WorkspaceNewCardOptions {
+  cwd: string;
+  profile: string;
+}
+
+export function workspaceNewCard(options: WorkspaceNewCardOptions): object {
+  return shell('🆕 新建 Codex 会话', [
+    divMd(
+      `已选择 Codex profile：**${escapeMd(options.profile)}**\n` +
+      `📁 当前 cwd：\`${escapeCode(options.cwd)}\`\n\n` +
+      '下一条消息会在此工作目录创建新的 Codex 会话。',
+    ),
+    HR,
+    actions([
+      {
+        text: '🔁 恢复历史会话',
+        value: { cmd: 'ws.resume' },
+      },
+    ]),
   ]);
 }
 
@@ -323,15 +352,33 @@ export interface ResumeEntry {
   lineCount?: number;
   detail?: string;
   current?: boolean;
+  /** Render the ID as a non-editable input so users can select/copy it. */
+  copyableId?: boolean;
 }
 
-export function resumeCard(cwd: string, entries: ResumeEntry[]): object {
+export function resumeCard(
+  cwd: string,
+  entries: ResumeEntry[],
+  options: { showNewCodexAction?: boolean } = {},
+): object {
   const elements: object[] = [];
   elements.push(divMd(`当前 cwd：\`${escapeCode(cwd)}\``));
 
   if (entries.length === 0) {
     elements.push(HR);
     elements.push(divMd('此 cwd 下没有历史会话。'));
+    if (options.showNewCodexAction) {
+      elements.push(HR);
+      elements.push(
+        actions([
+          {
+            text: '🆕 不恢复，创建新 Codex 会话',
+            value: { cmd: 'ws.new' },
+            style: 'primary',
+          },
+        ]),
+      );
+    }
     return shell('🔁 恢复历史会话', elements);
   }
 
@@ -342,9 +389,25 @@ export function resumeCard(cwd: string, entries: ResumeEntry[]): object {
     const displayId = e.displayId ?? e.sessionId;
     elements.push(
       divMd(
-        `**${i + 1}.** ${escapeMd(e.preview)}${marker}\n\`${escapeCode(displayId)}\` · ${e.relTime} · ${escapeMd(detail)}`,
+        `**${i + 1}.** ${escapeMd(e.preview)}${marker}\n${e.copyableId ? '' : `\`${escapeCode(displayId)}\` · `}${e.copyableId ? `${escapeMd(e.relTime)} · ` : ''}${escapeMd(detail)}`,
       ),
     );
+    if (e.copyableId) {
+      elements.push({
+        tag: 'form',
+        name: `codex_thread_id_form_${i + 1}`,
+        elements: [
+          {
+            tag: 'input',
+            name: `codex_thread_id_${i + 1}`,
+            label: { tag: 'plain_text', content: 'Codex thread ID' },
+            default_value: displayId,
+            input_type: 'text',
+            disabled: true,
+          },
+        ],
+      });
+    }
     elements.push(
       actions([
         {
@@ -356,6 +419,19 @@ export function resumeCard(cwd: string, entries: ResumeEntry[]): object {
     );
     if (i < entries.length - 1) elements.push(HR);
   });
+
+  if (options.showNewCodexAction) {
+    elements.push(HR);
+    elements.push(
+      actions([
+        {
+          text: '🆕 不恢复，创建新 Codex 会话',
+          value: { cmd: 'ws.new' },
+          style: 'primary',
+        },
+      ]),
+    );
+  }
 
   return shell('🔁 恢复历史会话', elements);
 }

@@ -380,7 +380,7 @@ async function confirmStopRuntimeLockProcess(err: RuntimeLockConflictError): Pro
   }
 }
 
-async function flushTelemetry(timeoutMs = 2000): Promise<void> {
+async function flushTelemetry(timeoutMs = 5 * 60_000): Promise<void> {
   try {
     await telemetry().flush?.(timeoutMs);
   } catch {
