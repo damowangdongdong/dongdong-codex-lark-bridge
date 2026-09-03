@@ -747,7 +747,7 @@ describe('agent-aware resume commands', () => {
 
     const launch = h.dispatchLaunch('freerouter', 'new');
     await lookupStarted;
-    await vi.advanceTimersByTimeAsync(10_000);
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
     await launch;
 
     expect(h.projectChats.createCalls).toBe(1);
@@ -771,7 +771,7 @@ describe('agent-aware resume commands', () => {
 
     const launch = h.dispatchLaunch('freerouter', 'new');
     await lookupStarted;
-    await vi.advanceTimersByTimeAsync(10_000);
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
     await launch;
 
     expect(h.projectChats.createCalls).toBe(1);

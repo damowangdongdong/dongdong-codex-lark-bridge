@@ -187,7 +187,10 @@ const resumeCandidates = new Map<string, ResumeCandidate>();
 const projectChatResolutions = new Map<string, Promise<ResolvedProjectChat | undefined>>();
 const AUDIT_SAFE_COMMAND_REPLY = '命令已处理。';
 const RESUME_APPLIED_REPLY = '已完成，请继续发送下一条消息。';
-const PROJECT_CHAT_LOOKUP_TIMEOUT_MS = 10_000;
+// Feishu chat/member reads can be slow when the tenant is under load. Keep
+// the idempotency guard alive long enough for a retried callback to join the
+// same in-flight resolution instead of starting a second group creation.
+const PROJECT_CHAT_LOOKUP_TIMEOUT_MS = 5 * 60_000;
 
 const handlers: Record<string, Handler> = {
   '/new': handleNew,
@@ -1469,9 +1472,11 @@ async function resolveProjectChat(
   requestedName?: string,
 ): Promise<ResolvedProjectChat | undefined> {
   // A slow Feishu callback can be retried before the first createChat call
-  // returns. Serialize resolutions for the same operator and canonical path
-  // so retries observe the same in-flight result instead of creating a group.
-  const key = `${ctx.msg.senderId}\u0000${cwd}`;
+  // returns. Serialize resolutions for this bridge profile/app, operator and
+  // canonical path so retries observe the same in-flight result instead of
+  // creating a second group. Keep the operator in the key because a project
+  // group is private and initially contains only its requesting user.
+  const key = `${ctx.controls.profile}\u0000${ctx.controls.cfg.accounts.app.id}\u0000${ctx.msg.senderId}\u0000${cwd}`;
   const pending = projectChatResolutions.get(key);
   if (pending) return pending;
 
@@ -1501,6 +1506,7 @@ async function resolveProjectChatInternal(
         ?? requestedName
         ?? projectChatName(ctx, cwd);
       ctx.workspaces.setProjectChat(cwd, { chatId: ctx.msg.chatId, name });
+      await ctx.workspaces.flush();
       return { chatId: ctx.msg.chatId, name, created: false };
     }
   }
@@ -1539,6 +1545,10 @@ async function resolveProjectChatInternal(
       inviteOpenId: ctx.msg.senderId,
     });
     ctx.workspaces.setProjectChat(cwd, created);
+    // The remote group already exists at this point. Persist its binding
+    // before returning so a daemon restart cannot lose the only idempotency
+    // record and create a second group for the same path.
+    await ctx.workspaces.flush();
     ctx.controls.knownChats = [
       ...(ctx.controls.knownChats ?? []).filter((chat) => chat.id !== created.chatId),
       { id: created.chatId, name: created.name },

@@ -584,7 +584,15 @@ function createFakeLarkChannel(harnessOptions: {
         v6: {
           application: {
             get: vi.fn(async () => ({
-              data: { app: { owner: { owner_id: 'ou_owner' } } },
+              data: {
+                app: {
+                  owner: { owner_id: 'ou_owner' },
+                  scopes: [
+                    { scope: 'im:chat' },
+                    { scope: 'im:chat.members:read' },
+                  ],
+                },
+              },
             })),
           },
         },

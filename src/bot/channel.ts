@@ -69,6 +69,7 @@ import { fetchQuotedContext, fetchTopicContext, type QuotedContext } from './quo
 import { lookupMessageThreadId } from './thread-id';
 import { addWorkingReaction, removeReaction } from './reaction';
 import { fetchKnownChats } from './lark-info';
+import { requireProjectChatScopes } from './app-scope';
 import type { AppPaths } from '../config/app-paths';
 import {
   consumeCotEvents,
@@ -484,6 +485,14 @@ export async function startChannel(deps: StartChannelDeps): Promise<BridgeChanne
   }
 
   await channel.connect();
+  if (agent.id === 'codex') {
+    try {
+      await requireProjectChatScopes(channel, cfg.accounts.app.id);
+    } catch (err) {
+      await channel.disconnect().catch(() => undefined);
+      throw err;
+    }
+  }
   const ownerRefresh = createOwnerRefreshController({
     controls,
     source: channel,
