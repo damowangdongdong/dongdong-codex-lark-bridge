@@ -1009,7 +1009,7 @@ describe('agent-aware resume commands', () => {
     expect(h.workspaces.selectionFor('chat-1')).toMatchObject({ launchMode: 'new' });
   });
 
-  it('renders the Codex skill catalog as a readable grouped list', async () => {
+  it('renders the Codex skill catalog as separate panels within a paged card', async () => {
     const h = await createHarness('codex');
     h.agent.setAppServerResponse('skills/list', {
       data: [{
@@ -1049,6 +1049,7 @@ describe('agent-aware resume commands', () => {
 
     const cardJson = lastContentString(h.channel);
     expect(cardJson).toContain('Codex Skills');
+    expect(lastContent(h.channel)).toMatchObject({ card: { schema: '2.0' } });
     expect(cardJson).toContain('第 **1 / 2** 页');
     expect(cardJson).toContain('$research-pipeline');
     expect(cardJson).toContain('Research Pipeline');
@@ -1059,6 +1060,10 @@ describe('agent-aware resume commands', () => {
     expect(cardJson).toContain(`${h.tmp.workspace}/SKILL.md`);
     expect(cardJson).toContain('扫描错误');
     expect(cardJson).toContain('ignored malformed skill');
+
+    const firstPagePanels = cardElementsByTag(lastContent(h.channel), 'collapsible_panel');
+    expect(firstPagePanels).toHaveLength(6);
+    expect(firstPagePanels.every((panel) => panel.expanded === false)).toBe(true);
 
     const pageArgs: string[] = [];
     walkCard(lastContent(h.channel), (action) => {
@@ -1072,6 +1077,9 @@ describe('agent-aware resume commands', () => {
     expect(JSON.stringify(update?.params)).toContain('第 **2 / 2** 页');
     expect(JSON.stringify(update?.params)).toContain('$z-extra-5');
     expect(JSON.stringify(update?.params)).not.toContain('$research-pipeline');
+    const updatedCard = (update?.params as { cardJson?: unknown } | undefined)?.cardJson;
+    const secondPagePanels = cardElementsByTag(updatedCard, 'collapsible_panel');
+    expect(secondPagePanels).toHaveLength(1);
 
     await expect(h.run('/skills')).resolves.toBe(true);
     expect(lastContentString(h.channel)).toContain('$research-pipeline');
@@ -1643,6 +1651,22 @@ function walkCard(
     if (Array.isArray(child)) child.forEach((entry) => walkCard(entry, visitAction));
     else walkCard(child, visitAction);
   }
+}
+
+function cardElementsByTag(value: unknown, tag: string): Record<string, unknown>[] {
+  const found: Record<string, unknown>[] = [];
+  const visit = (current: unknown): void => {
+    if (!current || typeof current !== 'object') return;
+    if (Array.isArray(current)) {
+      current.forEach(visit);
+      return;
+    }
+    const record = current as Record<string, unknown>;
+    if (record.tag === tag) found.push(record);
+    Object.values(record).forEach(visit);
+  };
+  visit(value);
+  return found;
 }
 
 function codexThread(

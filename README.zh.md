@@ -183,7 +183,7 @@ Codex turn 运行时，点击 **↵ 立即插入** 会 steer 当前 turn（对�
 bridge 覆盖 Codex CLI 0.152.x 兼容的斜杠命令；发送 `/codex commands` 可以在飞书中查看完整清单。执行方式分为：
 
 - 飞书原生：`/permissions`、`/permission`、`/clear`、`/resume`、`/new`、`/status`。
-- app-server：`/apps`、`/plugins`、`/hooks`、`/rename`、`/title`、`/archive`、`/delete`、`/compact`、`/experimental`、`/memories`、`/skill`、`/skills`、`/mcp`、`/model`、`/fast`、`/plan`、`/goal`、`/personality`、`/clean`、`/fork`、`/review`、`/usage`、`/debug-config`、`/logout`。`/skill` 不带参数时以分页卡片列出技能，可用上一页/下一页切换；`/skill <名称> [指令]` 会在当前 Codex thread 中调用 `$名称`；没有 thread 时会自动新建并绑定会话。
+- app-server：`/apps`、`/plugins`、`/hooks`、`/rename`、`/title`、`/archive`、`/delete`、`/compact`、`/experimental`、`/memories`、`/skill`、`/skills`、`/mcp`、`/model`、`/fast`、`/plan`、`/goal`、`/personality`、`/clean`、`/fork`、`/review`、`/usage`、`/debug-config`、`/logout`。`/skill` 不带参数时每页展示 6 个技能，每个技能独立放在可展开面板中，可用上一页/下一页切换；`/skill <名称> [指令]` 会在当前 Codex thread 中调用 `$名称`；没有 thread 时会自动新建并绑定会话。
 - bridge 双重控制：`/ps`、`/stop`、`/exit`。在 Codex bot 中，`/ps` 表示后台终端，`/ps bridge` 才表示本机 bridge 进程；`/stop` 优先中断活动 turn，`/stop terminals` 和 `/clean` 停止 thread 的后台终端；永久删除必须显式发送 `/delete confirm`。
 - 附着 TUI：`/ide`、`/keymap`、`/vim`、`/setup-default-sandbox`、`/sandbox-add-read-dir`、`/agent`、`/subagents`、`/copy`、`/diff`、`/approve`、`/import`、`/feedback`、`/init`、`/mention`、`/app`、`/side`、`/btw`、`/raw`、`/quit`、`/statusline`、`/theme`、`/pets`、`/pet`。这些命令依赖终端本地 UI 状态，因此 bridge 会返回准确的 `/attach` 指引。
 

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  codexSkillsCard,
   resumeCard,
   workspaceLaunchCard,
   workspaceNewCard,
@@ -38,7 +39,7 @@ describe('Codex workspace launch cards', () => {
     expect(actions(card)).toContainEqual({ cmd: 'ws.resume' });
   });
 
-  it('renders Codex thread IDs in disabled, selectable inputs and offers new-session action', () => {
+  it('renders Codex thread IDs as selectable code and offers new-session action', () => {
     const threadId = '019abcde-0123-4567-89ab-cdef01234567';
     const card = resumeCard('/data/project', [{
       sessionId: 'resume-nonce',
@@ -46,20 +47,47 @@ describe('Codex workspace launch cards', () => {
       preview: 'research run',
       relTime: '刚刚',
       detail: 'Codex · cli',
-      copyableId: true,
     }], { showNewCodexAction: true });
 
-    const inputs: Record<string, unknown>[] = [];
-    walk(card, (record) => {
-      if (record.tag === 'input') inputs.push(record);
-    });
-    expect(inputs).toContainEqual(expect.objectContaining({
-      default_value: threadId,
-      input_type: 'text',
-      disabled: true,
-    }));
-    expect(actions(card)).toContainEqual({ cmd: 'resume.copy', arg: threadId });
+    expect(JSON.stringify(card)).toContain('`' + threadId + '`');
+    expect(JSON.stringify(card)).not.toContain('复制 ID');
+    expect(JSON.stringify(card)).not.toContain('resume.copy');
     expect(actions(card)).toContainEqual({ cmd: 'ws.new' });
+  });
+
+  it('renders each skill in its own collapsible panel within the paged card', () => {
+    const card = codexSkillsCard({
+      entries: [
+        {
+          cwd: '/data/project',
+          name: 'alpha',
+          displayName: 'Alpha',
+          description: 'First skill',
+          scope: 'user',
+          enabled: true,
+        },
+        {
+          cwd: '/data/project',
+          name: 'beta',
+          description: 'Second skill',
+          scope: 'system',
+          enabled: false,
+        },
+      ],
+      page: 1,
+      pageCount: 3,
+      total: 6,
+    }) as { schema?: string; body?: { elements?: Array<Record<string, unknown>> } };
+
+    const panels = (card.body?.elements ?? []).filter((element) => element.tag === 'collapsible_panel');
+    expect(card.schema).toBe('2.0');
+    expect(panels).toHaveLength(2);
+    expect(panels[0]).toMatchObject({ expanded: false, border: { color: 'blue' } });
+    expect(panels[1]).toMatchObject({ expanded: false, border: { color: 'grey' } });
+    expect(JSON.stringify(panels[0])).toContain('$alpha');
+    expect(JSON.stringify(panels[0])).not.toContain('$beta');
+    expect(JSON.stringify(panels[1])).toContain('$beta');
+    expect(JSON.stringify(panels[1])).not.toContain('$alpha');
   });
 
   it('offers resume from the new-session confirmation card', () => {

@@ -364,58 +364,104 @@ export interface CodexSkillsCardOptions {
 
 export function codexSkillsCard(options: CodexSkillsCardOptions): object {
   const elements: object[] = [
-    divMd(`共 **${options.total}** 个技能 · 第 **${options.page} / ${options.pageCount}** 页`),
+    {
+      tag: 'markdown',
+      content: `共 **${options.total}** 个技能 · 第 **${options.page} / ${options.pageCount}** 页`,
+    },
   ];
 
   if (options.entries.length === 0) {
-    elements.push(HR, divMd('未发现可用技能。'));
+    elements.push({ tag: 'hr' }, { tag: 'markdown', content: '未发现可用技能。' });
   } else {
-    const groups = new Map<string, CodexSkillCardEntry[]>();
-    for (const entry of options.entries) {
-      const group = groups.get(entry.cwd) ?? [];
-      group.push(entry);
-      groups.set(entry.cwd, group);
-    }
-    elements.push(HR);
-    let groupIndex = 0;
-    for (const [cwd, entries] of groups) {
-      const lines = [`**工作区**：\`${escapeCode(cwd)}\``];
-      for (const entry of entries) {
-        const displayName = entry.displayName && entry.displayName !== entry.name
-          ? ` · **${escapeMd(entry.displayName)}**`
-          : '';
-        const scope = entry.scope ? escapeMd(entry.scope) : '未标注范围';
-        const status = entry.enabled === true
-          ? '已启用'
-          : entry.enabled === false
-            ? '已停用'
-            : '状态未知';
-        lines.push(
-          `- \`$${escapeCode(entry.name)}\`${displayName} · ${scope} · ${status}`,
-          ...(entry.description ? [`  ${escapeMd(entry.description)}`] : []),
-          ...(entry.path ? [`  来源：\`${escapeCode(entry.path)}\``] : []),
-        );
-      }
-      elements.push(divMd(lines.join('\n')));
-      groupIndex += 1;
-      if (groupIndex < groups.size) elements.push(HR);
-    }
+    elements.push({ tag: 'hr' });
+    options.entries.forEach((entry, index) => {
+      elements.push(codexSkillPanel(entry));
+      if (index < options.entries.length - 1) elements.push({ tag: 'hr' });
+    });
   }
 
   if (options.errors?.length) {
-    elements.push(HR, divMd(['**扫描错误**', ...options.errors.map((error) => `- ${escapeMd(error)}`)].join('\n')));
+    elements.push(
+      { tag: 'hr' },
+      { tag: 'markdown', content: ['**扫描错误**', ...options.errors.map((error) => `- ${escapeMd(error)}`)].join('\n') },
+    );
   }
 
   const pageActions: ButtonSpec[] = [];
   if (options.page > 1) {
-    pageActions.push({ text: '上一页', value: { cmd: 'codex.skills.page', arg: String(options.page - 1) } });
+    pageActions.push({ text: '‹ 上一页', value: { cmd: 'codex.skills.page', arg: String(options.page - 1) } });
   }
   if (options.page < options.pageCount) {
-    pageActions.push({ text: '下一页', value: { cmd: 'codex.skills.page', arg: String(options.page + 1) }, style: 'primary' });
+    pageActions.push({ text: '下一页 ›', value: { cmd: 'codex.skills.page', arg: String(options.page + 1) }, style: 'primary' });
   }
-  if (pageActions.length) elements.push(HR, actions(pageActions));
+  if (pageActions.length) elements.push({ tag: 'hr' }, callbackActions(pageActions));
 
-  return shell('🧩 Codex Skills', elements);
+  return {
+    schema: '2.0',
+    config: { summary: { content: 'Codex Skills' } },
+    header: {
+      template: 'blue',
+      title: { tag: 'plain_text', content: '🧩 Codex Skills' },
+    },
+    body: { elements },
+  };
+}
+
+function codexSkillPanel(entry: CodexSkillCardEntry): object {
+  const displayName = entry.displayName && entry.displayName !== entry.name
+    ? ` · **${escapeMd(entry.displayName)}**`
+    : '';
+  const scope = entry.scope ? escapeMd(entry.scope) : '未标注范围';
+  const status = entry.enabled === true
+    ? '已启用'
+    : entry.enabled === false
+      ? '已停用'
+      : '状态未知';
+  const body = [
+    `**技能标识**：\`$${escapeCode(entry.name)}\``,
+    `**工作区**：\`${escapeCode(entry.cwd)}\``,
+    `**范围**：${scope}`,
+    `**状态**：${status}`,
+    ...(entry.description ? [`**简介**：\n${escapeMd(entry.description)}`] : []),
+    ...(entry.path ? [`**来源**：\`${escapeCode(entry.path)}\``] : []),
+  ];
+  return {
+    tag: 'collapsible_panel',
+    expanded: false,
+    header: {
+      title: { tag: 'markdown', content: `**\`$${escapeCode(entry.name)}\`**${displayName}` },
+      vertical_align: 'center',
+      icon: {
+        tag: 'standard_icon',
+        token: 'down-small-ccm_outlined',
+        size: '16px 16px',
+      },
+      icon_position: 'follow_text',
+      icon_expanded_angle: -180,
+    },
+    border: { color: entry.enabled === false ? 'grey' : 'blue', corner_radius: '5px' },
+    vertical_spacing: '8px',
+    padding: '8px 8px 8px 8px',
+    elements: [{ tag: 'markdown', content: body.join('\n\n'), text_size: 'notation' }],
+  };
+}
+
+function callbackActions(buttons: ButtonSpec[]): object {
+  return {
+    tag: 'column_set',
+    flex_mode: 'flow',
+    horizontal_spacing: 'small',
+    columns: buttons.map((spec) => ({
+      tag: 'column',
+      width: 'auto',
+      elements: [{
+        tag: 'button',
+        text: { tag: 'plain_text', content: spec.text },
+        ...(spec.style ? { type: spec.style } : {}),
+        behaviors: [{ type: 'callback', value: spec.value }],
+      }],
+    })),
+  };
 }
 
 export interface ResumeEntry {
@@ -426,8 +472,6 @@ export interface ResumeEntry {
   lineCount?: number;
   detail?: string;
   current?: boolean;
-  /** Render the ID as a non-editable input so users can select/copy it. */
-  copyableId?: boolean;
 }
 
 export function resumeCard(
@@ -463,32 +507,9 @@ export function resumeCard(
     const displayId = e.displayId ?? e.sessionId;
     elements.push(
       divMd(
-        `**${i + 1}.** ${escapeMd(e.preview)}${marker}\n${e.copyableId ? '' : `\`${escapeCode(displayId)}\` · `}${e.copyableId ? `${escapeMd(e.relTime)} · ` : ''}${escapeMd(detail)}`,
+        `**${i + 1}.** ${escapeMd(e.preview)}${marker}\n\`${escapeCode(displayId)}\` · ${escapeMd(e.relTime)} · ${escapeMd(detail)}`,
       ),
     );
-    if (e.copyableId) {
-      elements.push({
-        tag: 'form',
-        name: `codex_thread_id_form_${i + 1}`,
-        elements: [
-          {
-            tag: 'input',
-            name: `codex_thread_id_${i + 1}`,
-            label: { tag: 'plain_text', content: 'Codex thread ID' },
-            default_value: displayId,
-            input_type: 'text',
-            disabled: true,
-          },
-          {
-            tag: 'button',
-            name: `copy_codex_thread_id_${i + 1}`,
-            text: { tag: 'plain_text', content: '复制 ID' },
-            form_action_type: 'submit',
-            behaviors: [{ type: 'callback', value: { cmd: 'resume.copy', arg: displayId } }],
-          },
-        ],
-      });
-    }
     elements.push(
       actions([
         {

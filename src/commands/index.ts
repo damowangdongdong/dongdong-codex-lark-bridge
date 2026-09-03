@@ -2060,11 +2060,6 @@ async function handleResume(args: string, ctx: CommandContext): Promise<void> {
     }
     return applyResumeTakeover(rest, ctx);
   }
-  if (sub === 'copy' && rest) {
-    await reply(ctx, `Codex thread ID：\`${rest}\``);
-    return;
-  }
-
   // Default: list recent sessions
   const n = Number.parseInt(sub, 10);
   const limit = Number.isFinite(n) && n > 0 && n <= 20 ? n : 5;
@@ -2101,7 +2096,6 @@ async function handleResume(args: string, ctx: CommandContext): Promise<void> {
           preview: thread.name || thread.preview,
           relTime: formatRelTime(thread.updatedAtMs),
           detail: `Codex · ${thread.source}`,
-          copyableId: true,
           current: thread.threadId === entry?.threadId,
         };
       });
@@ -2120,7 +2114,6 @@ async function handleResume(args: string, ctx: CommandContext): Promise<void> {
             preview: '当前 Codex 会话',
             relTime: '当前',
             detail: 'Codex · 当前会话',
-            copyableId: true,
             current: true,
           }], { showNewCodexAction: true }),
         },
