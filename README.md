@@ -1,235 +1,259 @@
 # lark-channel-bridge
 
-A lightweight bot that bridges Feishu / Lark messenger with your local Claude Code or Codex CLI. Run one command, scan a QR code to bind a PersonalAgent app, and talk to your local coding agent from chat.
+把飞书 / Lark 消息接到本机的 Claude Code 或 Codex CLI。你可以在私聊、群聊、话题群和云文档评论里发任务，让本机 agent 读取项目、处理图片和文件、修改代码，并把过程与结果同步回飞书。
 
-[中文 README](./README.zh.md)
+**默认语言：中文。** [阅读 English README](./README.en.md)
 
-For a product walkthrough, see the [Feishu document](https://larkcommunity.feishu.cn/docx/OaRIdFIRFoLM3xxTmKwcetHqn5e).
+## 你可以用它做什么
 
-## What it does
+- 在飞书里直接使用本机已登录的 Claude Code 或 Codex CLI，不需要把代码上传到第三方服务。
+- 每个私聊、群、话题和云文档评论线程都有独立会话；会话、工作目录、权限和队列互不串线。
+- 回复支持流式消息卡片或一次性纯文本；可选展示工具调用和 COT 过程消息。
+- 图片、文件和引用消息可以跟任务一起发送；Bridge 下载附件后交给 agent。
+- Codex 支持 app-server、历史恢复、终端附着、技能、MCP、review、持久目标和后台终端控制。
+- 支持多个 profile，可分别运行不同飞书应用、不同 agent，或同时运行 Claude 与 Codex。
+- 可选开启会议智能体：入会、读取字幕、在会议中回答问题，并生成纪要。
+- 所有状态默认保存在本机；默认不发送遥测数据。
 
-- Forwards Feishu / Lark messages to local Claude Code or Codex CLI. Send a DM directly, or `@bot` in a group.
-- **Streaming card**: text replies and tool calls update on one Lark card in real time.
-- **COT process messages**: optionally send a process message with agent progress text and tool calls, then send the final answer separately.
-- **Session continuity**: each chat, topic, or document comment thread keeps its own session.
-- **Queueing and batching**: messages sent in quick succession are handled together; messages sent during a run are queued for the next turn, while commands like `/new`, `/cd`, `/ws use`, and `/stop` can interrupt the current task.
-- **Multiple workspaces**: use `/cd` to switch the current project, and `/ws` to save and reuse common project directories.
-- **Images and files**: send them to the bot directly, and the bridge downloads them locally for the agent.
-- **Interactive cards**: `/help`, `/ws list`, and `/status` return cards with clickable buttons.
+## 5 分钟开始使用
 
-## Prerequisites
+### 前置条件
 
-- Node.js **>= 20.12.0**
-- At least one local agent installed and logged in:
-  - Claude Code: `claude`, see https://docs.anthropic.com/en/docs/claude-code/quickstart
-  - Codex CLI: `codex`, see https://developers.openai.com/codex/cli
-- `lsof` and `ps` when using the Codex session takeover action on Linux or macOS.
-- A Feishu / Lark **PersonalAgent** app. The first-run QR wizard can create and bind one for you.
+- Node.js `>= 20.12.0`。
+- Codex 在 macOS/Linux 上执行会话接管时还需要 `lsof` 和 `ps`（Windows 使用系统自带进程工具）。
+- 本机安装并登录至少一个 agent：
+  - [Claude Code 快速开始](https://docs.anthropic.com/en/docs/claude-code/quickstart)，命令为 `claude`。
+  - [Codex CLI 文档](https://developers.openai.com/codex/cli)，命令为 `codex`。
+- 一个飞书 / Lark PersonalAgent 应用。首次运行的二维码向导可以创建并绑定应用。
 
-## Install
-
-```bash
-npm i -g lark-channel-bridge
-# or
-pnpm add -g lark-channel-bridge
-```
-
-## First run
+### 安装并启动
 
 ```bash
+npm install --global lark-channel-bridge
+# 或
+pnpm add --global lark-channel-bridge
+
+# 前台启动，适合首次配置和排障
 lark-channel-bridge run
 ```
 
-The first run opens a QR-code wizard:
+首次启动会依次：
 
-1. A QR code renders in your terminal.
-2. Scan it with the Feishu / Lark app.
-3. Pick or create a PersonalAgent app.
-4. If prompted, choose which agent to initialize.
-5. Config is written to `~/.lark-channel/config.json`.
+1. 在终端显示二维码，用飞书 App 扫码。
+2. 选择或创建 PersonalAgent 应用。
+3. 选择要初始化的 agent（Claude 或 Codex）。
+4. 将 profile、应用凭据和本地状态写入 `~/.lark-channel/`。
 
-You do not need to choose a project directory up front. The bridge creates a profile-managed default working directory; after startup, send `/cd <path>` in Feishu / Lark to switch to a real project.
+没有指定工作目录也可以启动。Bridge 会创建 profile 托管的默认目录；启动后在飞书发送 `/cd <绝对路径>` 切换到项目。
 
-If you already have a PersonalAgent app, pass `--app-id` during initialization to skip app creation. The command prompts for the App Secret.
+已有应用时可以跳过创建步骤：
 
 ```bash
 lark-channel-bridge run --app-id cli_xxx
-# or initialize and start the background service directly
-lark-channel-bridge start --app-id cli_xxx
+lark-channel-bridge run --app-id cli_xxx --tenant lark
 ```
 
-For Lark global apps, add `--tenant lark`.
+命令会交互式读取 App Secret。不要把 Secret 写进 shell 历史或提交到仓库。
 
-## Background service
-
-Use `run` for first-run setup and foreground debugging. After the bot can send and receive messages, stop the foreground process with `Ctrl-C`, then use an OS-managed service for background operation:
-
-```bash
-lark-channel-bridge start
-lark-channel-bridge status
-lark-channel-bridge stop
-```
-
-Install globally before using service commands. The daemon's launchd plist / systemd unit / Windows task records the bridge CLI path; if that path comes from an npm temp cache through `npx`, the daemon can break when the cache is cleaned. `run` is fine through `npx` as a one-shot foreground process.
-
-Service commands install a per-profile service:
-
-```bash
-lark-channel-bridge start [--profile <name>]
-lark-channel-bridge stop [--profile <name>]
-lark-channel-bridge restart [--profile <name>]
-lark-channel-bridge status [--profile <name>]
-lark-channel-bridge unregister [--profile <name>]
-```
-
-Platform mapping:
-- **macOS**: launchd user agent `ai.lark-channel-bridge.bot.<profile>`
-- **Linux**: systemd user unit `lark-channel-bridge.bot.<profile>.service`
-- **Windows**: Task Scheduler task `LarkChannelBridge.Bot.<profile>`, launched through a `.cmd` wrapper
-
-Daemon logs are under `~/.lark-channel/profiles/<profile>/logs/daemon/`.
-
-### Multiple profiles: Claude and Codex
-
-By default, the bridge starts with the currently selected profile. Use `profile use <name>` to change it. Each profile keeps its own app credentials, sessions, working directories, and logs. Create multiple profiles only when you need to connect multiple PersonalAgent apps, or run Claude and Codex as separate bots:
-
-```bash
-lark-channel-bridge start --profile claude --agent claude
-lark-channel-bridge start --profile codex --agent codex
-```
-
-For example, to restart only the Codex bot:
-
-```bash
-lark-channel-bridge restart --profile codex
-lark-channel-bridge status --profile codex
-```
-
-## Commands
-
-### Host CLI
+### 在飞书里发第一条任务
 
 ```text
-lark-channel-bridge run [--profile <name>] [--agent claude|codex] [--workspace <path>] [-c <config>]
-lark-channel-bridge migrate [--profile <name>] [--agent claude|codex]
-lark-channel-bridge ps
-lark-channel-bridge kill <id|#>
-lark-channel-bridge --help
+/cd /Users/me/project
+请检查这个项目的测试失败原因，并给出修复方案。
 ```
 
-`profile use <name>` changes the profile used by later default starts. Use these profile management commands when running separate Claude / Codex bots, connecting multiple PersonalAgent apps, or doing scripted deployment:
+Claude 会切换目录并开始新会话。Codex 会先显示启动卡，让你选择 Codex CLI profile，以及新建还是恢复 thread；从私聊继续时，Bridge 会进入该路径的专属项目群。
 
-```bash
-lark-channel-bridge profile create claude --agent claude
-lark-channel-bridge profile create codex --agent codex
-lark-channel-bridge profile list
-lark-channel-bridge profile use <name>
-lark-channel-bridge profile remove <name>
-lark-channel-bridge profile remove <name> --purge --yes
-lark-channel-bridge profile export <name> [--output ./profile.json] [--force]
-lark-channel-bridge profile export <name> --include-secrets --yes
-```
+## 消息从哪里进入
 
-`profile remove` archives local state by default, including the active profile. If other profiles remain, the bridge switches to the next one; if it was the last profile, the root config is cleared so the same name can be created again. `--purge --yes` permanently deletes local state. `profile export` redacts app secrets by default; `--include-secrets --yes` includes sensitive config.
+- **私聊**：直接发消息，不需要 `@bot`。
+- **群聊和话题群**：默认需要 `@bot`；可以在 `/config` 里关闭这个要求。`@all` 永远不会触发回复。
+- **云文档评论**：在支持的文档评论中 `@bot` 即可。评论会话按文档和评论线程隔离，不需要 `/doc` 绑定工作区。
 
-If a profile was created with the wrong agent kind, stop or unregister any matching background service first, then run `profile remove <name>` and recreate it with the intended `--agent`.
+Cloud-doc comments are document-scoped：云文档评论按文档权限生效，回复留在同一评论线程。
+- **引用消息**：回复一条消息再提问时，引用内容会作为当前任务上下文。
+- **附件**：图片和文件可以与文字一起发送。Bridge 会下载到 profile 的媒体缓存，经过当前附件策略检查后交给 agent。
 
-### Slash commands inside Feishu / Lark
+陌生用户默认不会收到权限错误，而是静默忽略。应用 owner 始终可以使用 bot；管理员可以使用管理命令并绕过群白名单。团队版会开放普通用户的 `@bot` 使用，但仍限制敏感管理命令。
 
-| Command | Effect |
-|---|---|
-| `/new`, `/clear`, `/reset` | Clear the current session |
-| `/new chat [name]` | Enter the dedicated group for the current path, reusing it when still available, and start a fresh thread |
-| `/cd <path>` | Switch working directory; Codex then asks for a CLI profile and new/resume mode |
-| `/profile` | In the bot DM, switch the bot-wide default Codex CLI profile; in a project group, re-select that group's profile and new/resume mode |
-| `/ws list` | List named workspaces |
-| `/ws save <name>` | Save the current working directory as a named workspace |
-| `/ws use <name>` | Switch to a named workspace; Codex then opens the same launch picker |
-| `/ws remove <name>` | Delete a named workspace |
-| `/resume` | Resume history for the selected Codex profile; admins can confirm takeover when another Codex process owns the thread |
-| `/permissions [read-only\|workspace-write\|danger-full-access]` | Show or persist the Codex permission for this chat/topic (`/permission` also works) |
-| `/attach` | Print the exact command for attaching a local Codex TUI to this thread |
-| `/status` | Show profile, agent, working directory, session, lark-cli identity, and run state |
-| `/config` | Adjust presentation preferences, access settings, and lark-cli identity policy |
-| `/invite user @name` | Allow a user to use the bot in DMs |
-| `/invite admin @name` | Add an access-control admin |
-| `/invite group` | Allow the current group to use the bot |
-| `/invite all group` | Allow all groups the bot has joined |
-| `/remove user @name`, `/remove admin @name`, `/remove group` | Remove access entries |
-| `/stop` | With Codex, interrupt the active turn; if none is active, stop background terminals |
-| `/stop terminals`, `/clean` | Stop all background terminals for the current Codex thread |
-| `/timeout [N\|off\|default]` | Set or clear the current session idle watchdog |
-| `/ps` | With Codex, list background terminals for the current thread |
-| `/ps bridge` | List local bridge processes |
-| `/delete`, `/delete confirm` | Preview, then permanently delete the current Codex thread and its child threads |
-| `/codex commands` | Show the complete Codex 0.152.x-compatible slash-command inventory and where each command runs |
-| `/exit <id\|#>` | Stop a bridge process |
-| `/reconnect` | Force a WebSocket reconnect |
-| `/doctor [description]` | Run low-sensitive diagnostics |
-| `/help` | Help card |
+## Bridge 命令：每条命令都有示例
 
-DMs do not require an @ mention. Groups and topic groups require `@bot` by default; `@all` is ignored. Cloud-doc comments in supported document types run when the bot is mentioned.
+以下命令在飞书消息中使用。`<...>` 表示替换成自己的值，`[...]` 表示可选参数。
 
-### Codex CLI workflow
+### 开始工作、切目录、恢复会话
 
-Codex uses one persistent `codex app-server` per selected Codex CLI profile. In the bot DM, `/profile` sets the bot-wide default profile used by later project selections; existing project groups keep their own overrides. After `/cd` or `/ws use`, the bridge does not start a session automatically: the launch card asks whether to use the default Codex configuration (no `--profile`) or a discovered named profile such as `freerouter`, and whether to create or resume a thread. From a direct chat, continuing opens the path's dedicated project group; an existing live group for the same canonical path is reused. Use `/profile` in that group to switch profiles or choose new/resume again. `/resume` lists history for the selected profile's model provider and, after selection, shows the user/assistant conversation from that thread; an interrupted turn keeps its last assistant update. Bridge-only context and duplicated internal execution details are removed, and each history page is grouped under a collapsed full-conversation panel while retaining the individual turn and message panels inside it. Live runs still send the complete folded step trace. The bridge verifies availability with Codex itself instead of trusting its local catalog; when a real writer conflict exists, an administrator receives a second-confirmation action that terminates the holding Codex process and retries the resume.
+| 命令 | 可复制的示例 | 执行后的效果 |
+|---|---|---|
+| `/help` | `/help` | 打开按场景组织的帮助卡；卡片按钮可直接查看状态、目录、历史或新会话。 |
+| `/status` | `/status` | 显示当前 profile、agent、cwd、会话 ID、权限、lark-cli 身份、运行中任务和队列。 |
+| `/cd` | `/cd ~/work/demo` | 切换当前 scope 的工作目录并中断正在运行的任务；Claude 立即新建会话，Codex 显示启动选择卡。 |
+| `/ws list` | `/ws list` | 用卡片列出当前 cwd 和命名工作目录。 |
+| `/ws save` | `/ws save backend` | 把当前 cwd 保存为 `backend` 快捷方式；不会复制或移动文件。 |
+| `/ws use` | `/ws use backend` | 切换到 `backend` 指向的目录；Codex 会重新让你选择 profile 和新建/恢复。 |
+| `/ws remove` | `/ws remove backend` | 删除目录快捷方式，不删除磁盘文件。别名 `rm` 也可用。 |
+| `/new` | `/new` | 中断当前任务，清空当前私聊、群或话题的会话，下一条消息从全新会话开始。 |
+| `/clear` | `/clear` | `/new` 的同义命令。 |
+| `/reset` | `/reset` | `/new` 的同义命令。 |
+| `/resume` | `/resume 2` | 打开第 2 页历史会话；点选某项后恢复，并发送可展开的完整历史。 |
+| `/new chat` | `/new chat 发布检查` | Codex 下按当前路径创建或复用专属项目群，并创建新的 thread。 |
+| `/profile` | `/profile` | Codex 私聊中选择 Bot 默认 CLI profile；项目群中选择该群 profile，并继续新建或恢复会话。 |
+| `/attach` | `/attach` | 输出 `codex --remote ... resume ...` 命令；在本机终端运行后，终端和飞书共享同一个 thread。 |
+| `/permissions` | `/permissions workspace-write` | 设置当前聊天/话题的 Codex 权限；不带参数会打开权限卡。也支持 `/permission`。 |
+| `/goal` | `/goal 修复登录超时` | 没有 thread 时自动创建会话并启动首轮；已有 thread 时更新持久目标。`/goal` 查看，`/goal pause` 暂停，`/goal resume` 恢复，`/goal clear` 清除。 |
 
-While a Codex turn is running, use **↵ Insert now** to steer the active turn (Enter semantics), or **⇥ Queue** to run the instruction after it completes (Tab semantics). `/attach` prints `codex [--profile <name>] --remote <endpoint> resume <thread-id>` and includes the selected profile when one is active; input entered in that attached terminal and its resulting progress/final answer are mirrored back to Feishu. Feishu-originated turns use the same app-server and thread.
+### 运行控制、诊断和应用凭据
 
-In a scope with no Codex thread yet, send `/goal <objective>` directly. The bridge creates a new conversation, stores the persistent goal, and starts the first turn, matching the Codex CLI new-chat flow. The scope must have a working directory; send `/cd <absolute-path>` first when it does not, or configure `workspaces.default` in the profile. Example:
+| 命令 | 可复制的示例 | 执行后的效果 |
+|---|---|---|
+| `/stop` | `/stop` | 中断当前 turn；Codex 没有活动 turn 时改为停止当前 thread 的后台终端。 |
+| `/stop terminals` | `/stop terminals` | 停止当前 Codex thread 的全部后台终端；`/clean` 是同义命令。 |
+| `/timeout` | `/timeout 15` | 为当前 scope 设置 15 分钟空闲探活；agent 连续无输出达到时限会被终止。 |
+| `/timeout off` | `/timeout off` | 关闭当前 scope 的探活。 |
+| `/timeout default` | `/timeout default` | 清除当前 scope 的覆盖，恢复全局 `/config` 设置。 |
+| `/timeout comment:` | `/timeout comment:abc123 10` | 管理员为指定云文档评论 scope 设置 10 分钟探活。 |
+| `/ps` | `/ps` | Claude 下列出本机 Bridge 进程；Codex 下列出当前 thread 的后台终端。 |
+| `/ps bridge` | `/ps bridge` | Codex 下明确列出本机 Bridge 进程。 |
+| `/exit` | `/exit 2` | 按 `/ps` 表格中的短 ID 或序号停止指定 Bridge 进程。 |
+| `/reconnect` | `/reconnect` | 重新建立飞书 WebSocket 连接；适合网络恢复后使用。 |
+| `/doctor` | `/doctor 群里没有回复` | 运行低敏诊断，并把现象交给 agent 分析；不会导出 Secret。 |
+| `/account` | `/account` | 显示当前绑定的飞书应用信息。 |
+| `/account change` | `/account change` | 打开更换 App ID / App Secret 的表单；校验成功后保存并重连当前 profile。 |
+| `/doc` | `/doc` | 说明云文档评论已不需要工作区绑定；实际使用是在评论中 `@bot`。 |
 
-`/goal Use the $research-pipeline skill to analyze the reproduction target, required models and resources, then produce an executable experiment plan.`
+### 访问控制
 
-When a thread already exists, `/goal <objective>` only updates that thread's persistent goal. Use `/goal` to inspect it, `/goal pause` or `/goal resume` to change its status, and `/goal clear` to remove it.
+只有应用 owner 和管理员能修改访问名单。命令中的 `@某人` 必须指向目标用户，不是指向 bot。
 
-The bridge covers the Codex CLI 0.152.x-compatible slash-command inventory. `/codex commands` prints this inventory in Feishu. The execution surfaces are:
+| 命令 | 可复制的示例 | 执行后的效果 |
+|---|---|---|
+| `/invite user` | `/invite user @小王` | 把小王加入允许私聊使用 bot 的名单。 |
+| `/invite admin` | `/invite admin @小王` | 把小王加入管理员名单；他可以改设置、使用管理命令并在任意群使用 bot。 |
+| `/invite group` | 在目标群发送 `/invite group` | 把当前群加入响应名单，群内成员都可以使用 bot。 |
+| `/invite all group` | `/invite all group` | 一次把 bot 已加入的全部群加入响应名单。 |
+| `/remove user` | `/remove user @小王` | 从允许私聊名单移除小王。 |
+| `/remove admin` | `/remove admin @小王` | 撤销小王的管理员身份。 |
+| `/remove group` | 在目标群发送 `/remove group` | 把当前群移出响应名单。 |
 
-- Bridge-native: `/permissions`, `/permission`, `/clear`, `/resume`, `/new`, `/status`.
-- App-server: `/apps`, `/plugins`, `/hooks`, `/rename`, `/title`, `/archive`, `/delete`, `/compact`, `/experimental`, `/memories`, `/skill`, `/skills`, `/mcp`, `/model`, `/fast`, `/plan`, `/goal`, `/personality`, `/clean`, `/fork`, `/review`, `/usage`, `/debug-config`, `/logout`. `/skill` without arguments shows six skills per page in separate expandable panels with previous/next controls; `/skill <name> [instruction]` invokes `$name` in the current Codex thread and starts a thread automatically when needed.
-- Hybrid bridge controls: `/ps`, `/stop`, `/exit`. In a Codex bot, `/ps` means Codex background terminals and `/ps bridge` means local bridge processes; `/stop` interrupts an active turn, while `/stop terminals` and `/clean` stop the thread's background terminals. `/delete` requires the explicit `/delete confirm` form before permanent deletion.
-- Attached-TUI commands: `/ide`, `/keymap`, `/vim`, `/setup-default-sandbox`, `/sandbox-add-read-dir`, `/agent`, `/subagents`, `/copy`, `/diff`, `/approve`, `/import`, `/feedback`, `/init`, `/mention`, `/app`, `/side`, `/btw`, `/raw`, `/quit`, `/statusline`, `/theme`, `/pets`, `/pet`. The bridge responds with the exact `/attach` instruction because these commands depend on terminal-local UI state.
+### 会议智能体
 
-Unknown slash commands are consumed as commands and are never sent to the model as prompts.
+会议能力默认关闭。管理员在 Web 控制台或 profile 配置中启用并重启后，才能使用下列命令。会议号只接受 9 位数字。
 
-## Reply Display and COT
+Web 控制台的会议设置还包括：被邀请时自动入会、字幕保留条数和稳定窗口、回答发送到会议/私聊/两者、会中触发前缀，以及会议结束后把纪要发给发起聊天或 owner。`/meeting ask` 的回答只发给提问者，不会把私聊问题广播到会议。
 
-`/config` controls three presentation settings:
+| 命令 | 可复制的示例 | 执行后的效果 |
+|---|---|---|
+| `/meeting` | `/meeting` | 显示正在跟踪的会议、字幕数量、参会人数和事件推送状态。 |
+| `/meeting join` | `/meeting join 123456789` | 让 bot 以参会者身份入会并开始收集字幕。 |
+| `/meeting ask` | `/meeting ask 刚才的结论是什么？` | 将最近会议上下文交给 agent，回答只发送给提问者。 |
+| `/meeting notes` | `/meeting notes` | 基于字幕生成讨论内容、结论和待办；有多场会议时附上会议号。 |
+| `/meeting transcript` | `/meeting transcript 123456789` | 显示 agent 实际收到的最近字幕，便于核对上下文。 |
+| `/meeting stop` | `/meeting stop 123456789` | 中断该会议当前正在运行的任务。 |
+| `/meeting leave` | `/meeting leave 123456789` | 让 bot 离开指定会议。 |
 
-- **Message reply mode**: `message card` streams the final reply; `plain text` sends once after the run finishes.
-- **Tool-call display**: controls whether tool blocks appear in the final card / markdown reply.
-- **COT process message**: `off` sends only the final reply; `brief` first sends a COT message with agent progress text and tool summaries; `detailed` also includes tool args and truncated output.
+## Codex CLI 命令覆盖
 
-When COT is enabled, the bridge splits the process view and final answer into two messages. The COT message is for tracing what the agent did; the final answer is still generated from the agent's raw text, without heuristic bridge-side filtering. If an agent emits final-answer text as ordinary stream text, that text can also appear in the COT process message.
+Codex profile 使用常驻 `codex app-server`。在 turn 运行时，运行卡上的 **↵ 立即插入** 会立即 steer 当前 turn，**⇥ 排队** 会等当前 turn 完成后再执行。发送 `/codex commands` 可以在飞书里随时查看当前版本（兼容 Codex 0.152.x）的清单。
 
-Codex completions additionally emit paginated full-trace cards before the separate final answer. Reasoning, commentary, attached-terminal input, tool arguments, tool output, and token usage remain distinct; long sections are split across cards instead of being truncated. This also applies to turns started from an attached terminal.
+### app-server 命令
 
-## lark-cli identity policy
+这些命令通过 app-server RPC 执行，示例和结果如下：
 
-Each profile uses a profile-local lark-cli directory at `~/.lark-channel/profiles/<profile>/lark-cli`. The agent process receives `LARKSUITE_CLI_CONFIG_DIR` for that directory, so personal authorization in one profile is not shared with another profile.
+| 命令 | 示例 | 效果 |
+|---|---|---|
+| `/apps` | `/apps` | 列出当前可用 Apps。 |
+| `/plugins` | `/plugins` | 列出当前工作目录可用插件。 |
+| `/hooks` | `/hooks` | 列出当前工作目录配置的 hooks。 |
+| `/rename` | `/rename 发布前检查` | 重命名当前 thread。`/title` 同义。 |
+| `/title` | `/title 发布前检查` | 重命名当前 thread。 |
+| `/archive` | `/archive` | 归档当前 thread。 |
+| `/delete` | `/delete`，随后 `/delete confirm` | 先预览删除范围；显式确认后永久删除当前 thread 及子 thread。 |
+| `/compact` | `/compact` | 请求 Codex 压缩当前 thread 的上下文。 |
+| `/experimental` | `/experimental` | 查看实验功能状态；带支持的参数可切换状态。 |
+| `/memories` | `/memories` | 查看或管理 Codex memories。 |
+| `/skill` | `/skill research-pipeline 先分析目标` | 在当前 thread 调用指定 skill；没有 thread 时自动创建。 |
+| `/skills` | `/skills` | 分页列出可用技能；每页 6 个并可展开查看说明。 |
+| `/mcp` | `/mcp verbose` | 查看 MCP 服务状态；`verbose` 显示完整工具和授权信息。 |
+| `/model` | `/model` | 查看或切换当前 Codex 模型。 |
+| `/fast` | `/fast` | 查看或切换快速模式。 |
+| `/plan` | `/plan` | 查看或切换 Codex 计划模式。 |
+| `/goal` | `/goal 修复登录超时` | 创建或更新持久目标；`pause`、`resume`、`clear` 管理状态。 |
+| `/personality` | `/personality` | 查看或切换 Codex 回复风格。 |
+| `/clean` | `/clean` | 停止当前 thread 的全部后台终端。 |
+| `/fork` | `/fork` | 从当前 thread 创建分支会话。 |
+| `/review` | `/review 检查未提交改动` | 启动 Codex review；不写说明时默认检查未提交改动。 |
+| `/usage` | `/usage` | 读取并显示 Codex 账号用量。 |
+| `/debug-config` | `/debug-config` | 显示 Codex 当前生效配置，便于排查。 |
+| `/logout` | `/logout` | 退出 Codex 登录状态。 |
 
-The default policy is `bot-only`: lark-cli uses the app/bot identity and does not access personal resources. When a user authorizes personal resources such as calendar, mail, or drive, the current profile can switch to `user-default`, which keeps app identity available and also allows the authorized user identity. Owner/admin users can inspect or change this policy in `/config`; `/status` shows the current summary as `lark-cli: app` or `lark-cli: user-ready`.
+### Bridge 原生和双重语义命令
 
-## Working directories
+| 命令 | 示例 | 效果 |
+|---|---|---|
+| `/permissions` | `/permissions read-only` | 持久化当前聊天/话题的权限，不能超过 profile 上限。 |
+| `/permission` | `/permission danger-full-access` | `/permissions` 的兼容别名。 |
+| `/clear` | `/clear` | 清空当前 Codex scope，会话从下一条消息重新开始。 |
+| `/resume` | `/resume 1` | 浏览并恢复当前 profile 可用的历史 thread。 |
+| `/new` | `/new` | 创建新的 Codex thread。 |
+| `/status` | `/status` | 显示 Codex profile、thread、cwd、权限和运行状态。 |
+| `/profile` | `/profile` | 在卡片中选择默认或命名 Codex CLI profile。 |
+| `/ps` | `/ps` | 列出当前 thread 的后台终端；`/ps bridge` 查看 Bridge 进程。 |
+| `/stop` | `/stop` | 中断活动 turn；没有活动 turn 时停止后台终端。 |
+| `/exit` | `/exit 1` | 停止指定 Bridge 进程。 |
+| `/attach` | `/attach` | 输出附着当前 thread 的本机 Codex 命令。 |
+| `/codex commands` | `/codex commands` | 列出所有 Codex 兼容命令及执行位置；`/codex help` 同义。 |
+| `/codex skills page N` | `/codex skills page 2` | 直接打开第 2 页技能列表。 |
 
-Each profile may define a default working directory through `workspaces.default`. New profiles may be created with `--workspace <path>`; if omitted, the bridge creates a profile-managed default working directory.
+### 只能在附着 TUI 中执行的命令
 
-This is a profile-field snippet. Do not replace the whole `config.json` with it; edit the matching profile's `workspaces` field.
+这些命令依赖终端本地 UI 状态。直接在飞书发送时，Bridge 会告诉你先运行 `/attach`，不会假装已经执行成功。
 
-```json
-{
-  "workspaces": {
-    "default": "/Users/me/.lark-channel-workspaces/claude/default"
-  }
-}
-```
+| 命令 | 示例 | 效果 |
+|---|---|---|
+| `/ide` | `/ide` | 在附着的 Codex TUI 中打开 IDE 集成。 |
+| `/keymap` | `/keymap` | 在附着 TUI 查看或切换按键映射。 |
+| `/vim` | `/vim` | 在附着 TUI 切换 Vim 编辑模式。 |
+| `/setup-default-sandbox` | `/setup-default-sandbox` | 在附着 TUI 配置默认 sandbox。 |
+| `/sandbox-add-read-dir` | `/sandbox-add-read-dir` | 在附着 TUI 增加只读目录。 |
+| `/agent` | `/agent` | 在附着 TUI 选择或查看 agent。 |
+| `/subagents` | `/subagents` | 在附着 TUI 查看子 agent。 |
+| `/copy` | `/copy` | 在附着 TUI 复制当前内容。 |
+| `/diff` | `/diff` | 在附着 TUI 查看改动差异。 |
+| `/approve` | `/approve` | 在附着 TUI 审批待处理操作。 |
+| `/import` | `/import` | 在附着 TUI 导入内容。 |
+| `/feedback` | `/feedback` | 在附着 TUI 打开反馈入口。 |
+| `/init` | `/init` | 在附着 TUI 初始化当前项目。 |
+| `/mention` | `/mention` | 在附着 TUI 使用提及功能。 |
+| `/app` | `/app` | 在附着 TUI 打开 app 选择器。 |
+| `/side` | `/side` | 在附着 TUI 打开侧栏。 |
+| `/btw` | `/btw` | 在附着 TUI 发起旁路提问。 |
+| `/raw` | `/raw` | 在附着 TUI 查看原始内容。 |
+| `/quit` | `/quit` | 在附着 TUI 退出当前界面。 |
+| `/statusline` | `/statusline` | 在附着 TUI 配置状态栏。 |
+| `/theme` | `/theme` | 在附着 TUI 切换主题。 |
+| `/pets` | `/pets` | 在附着 TUI 查看宠物设置。 |
+| `/pet` | `/pet` | 在附着 TUI 与宠物互动。 |
 
-The bridge checks that a selected directory exists, is a directory, and is not an overly broad location such as `/`, the home root, a system directory, or a temp root. The working directory is only the current directory for an agent run. It is not a filesystem sandbox; actual file access still depends on the local agent process and its permission mode.
+## 回复展示、权限和身份
 
-## Permission modes
+### `/config` 能调整什么
 
-The recommended user-facing profile config is `permissions.defaultAccess` and `permissions.maxAccess`. New profiles default to `full` for both values so the bridge can keep local tools, authorization flows, file writes, and other agent features fully usable. To tighten a profile, set one or both values to `workspace` or `read-only`; stricter modes can limit local tool execution, login/authorization flows, file writes, and similar capabilities.
+发送 `/config` 打开设置卡，提交后写入当前 profile：
 
-This is a profile-field snippet. Do not replace the whole `config.json` with it; edit the matching profile's `permissions` field.
+- **运行模式**：个人版（默认）只允许 owner、管理员和名单用户；团队版允许任何人 `@bot`，但敏感管理命令仍限 owner/admin。
+- **模型**：选择 agent 支持的模型，或跟随 CLI 默认值。
+- **消息回复方式**：消息卡片会流式更新；纯文本在任务结束后一次发送。
+- **工具调用显示**：决定最终回复是否展示工具块。
+- **COT 过程消息**：关闭、简略或详细。开启后过程和最终答案会分成两条消息。
+- **并发上限**：默认 10，范围 1-50，超出请求按 FIFO 排队。
+- **run 探活**：默认关闭，范围 1-120 分钟；单个 scope 可用 `/timeout` 覆盖。
+- **群里需要 @ bot**：默认开启；关闭后需要飞书应用具备 `im:message.group_msg` 权限。
+- **lark-cli 身份策略**：默认只使用应用身份；切换为用户身份后，已授权的个人日历、邮箱、云盘等资源可被 agent 使用。
+
+这里的 `lark-cli identity policy` 会作用于当前 profile。每个 profile 使用独立的 **profile-local lark-cli directory**：`~/.lark-channel/profiles/<profile>/lark-cli`。个人授权不会在 profile 之间共享。团队版会强制使用应用身份。
+
+### Codex 权限模式
+
+推荐配置字段是 `permissions.defaultAccess` 和 `permissions.maxAccess`，新 profile 默认都是 `full`：
 
 ```json
 {
@@ -240,151 +264,175 @@ This is a profile-field snippet. Do not replace the whole `config.json` with it;
 }
 ```
 
-Mode mapping:
-
-| Bridge access | Claude permission mode | Codex mode |
+| Bridge access | Claude | Codex |
 |---|---|---|
 | `full` | `bypassPermissions` | `danger-full-access` |
 | `workspace` | `acceptEdits` | `workspace-write` |
 | `read-only` | `plan` | `read-only` |
 
-The legacy `sandbox` field is still readable for old configs. After the bridge saves the profile, it migrates that setting to canonical `permissions`.
+Codex 的 `/permissions` 按聊天 / 话题保存实际权限，并受 `maxAccess` 限制。旧版 `sandbox` 字段（legacy `sandbox`）仍可读取；Bridge 保存 profile 时会迁移到 canonical `permissions`。
 
-For Codex, `/permissions` stores the effective mode per chat/topic and clamps it to the configured maximum. `/status` shows both the selected Codex profile and the effective permission mode.
+### 默认工作目录
 
-## Data directories
-
-| Path | Content |
-|---|---|
-| `~/.lark-channel/config.json` | Root config with profiles and active profile |
-| `~/.lark-channel/active-profile` | Last selected profile |
-| `~/.lark-channel/profiles/<profile>/sessions.json` | Session state |
-| `~/.lark-channel/profiles/<profile>/sessions.json.catalog.json` | Agent-aware session catalog |
-| `~/.lark-channel/profiles/<profile>/workspaces.json` | Current and named workspace bindings |
-| `~/.lark-channel/profiles/<profile>/secrets.enc` | Profile-local encrypted secrets |
-| `~/.lark-channel/profiles/<profile>/lark-cli/` | Profile-local lark-cli directory |
-| `~/.lark-channel/profiles/<profile>/media/` | Attachment cache |
-| `~/.lark-channel/profiles/<profile>/logs/` | Structured run logs |
-| `~/.lark-channel/registry/processes.json` | Local process registry |
-| `~/.lark-channel/registry/locks/` | Profile and app locks |
-
-Set `LARK_CHANNEL_HOME=/path/to/state` to move all local bridge state. `LARK_CHANNEL_LOG_DAYS` overrides log retention.
-
-## Access control
-
-**Chat access is private by default: out of the box, only *you* can use the bot in DMs and groups.** "You" = whoever created / owns the Feishu app (the person who scanned the QR to set it up). The bot figures out who the app owner is automatically from Feishu, so **solo chat use needs zero configuration** — you can DM it and `@`-mention it in any group, and everyone else's chat messages are silently ignored (no "permission denied" reply, which would only confirm the bot exists). Cloud-doc comments are document-scoped; see below.
-
-To let other people or groups in, add them to one of three lists:
-
-| List | Controls | Add | Remove |
-|------|----------|-----|--------|
-| **Allowed users** | who can DM the bot | `/invite user @them` | `/remove user @them` |
-| **Allowed chats** | which groups the bot answers in (for **everyone** in them) | `/invite group` (current group) / `/invite all group` (every group the bot is in) | `/remove group` (current group) |
-| **Admins** | who can change settings, and use the bot in any group | `/invite admin @them` | `/remove admin @them` |
-
-> `/invite` and `/remove` can only be run by **you (the creator) and admins**. The `@` in the command points at the *target person* (not the bot) — the bot resolves the mention to their identity, so you never deal with raw IDs.
-
-### Two identities that bypass everything
-
-- **You (the creator)**: subject to no list at all — DMs, any group, every command. You **can never lock yourself out**: even if the lists get messed up, DM the bot and send `/config` to get back in. Transfer the app's ownership in the Feishu console and the bot follows the new owner automatically.
-- **Admins**: can DM, run management commands like `/config`, and **bypass the allowed-chats list** — the bot answers them in any group, listed or not. Good for teammates who co-maintain the bot.
-
-### Common setups
-
-- **Just me** → nothing to do; this is the default.
-- **Let a teammate DM the bot** → `/invite user @them`
-- **Open a work group to everyone in it** → send `/invite group` inside that group
-- **First-time setup, onboard every group the bot is already in** → `/invite all group` pulls them all into the list at once; trim with `/remove group` afterwards
-- **Add a co-admin** → `/invite admin @them`
-
-### Worth knowing
-
-- Changes take effect on the **next message** — no restart needed.
-- **In groups you must `@` the bot first** (DMs don't need it). That's a separate toggle (`/config` → "require @ in groups"), independent of the lists above.
-- Strangers get pure silence — no reply at all. The one exception: if someone `@`-mentions the bot in a group that hasn't been opened up, the bot posts a friendly one-liner telling them an admin can run `/invite group` to enable it.
-- Cloud-doc comments are document-scoped: anyone who can comment in a supported document and mention the bot can trigger a reply.
-
-### Advanced: editing the config file directly
-
-If you'd rather not do it inside Feishu, `/invite` and `/config` write the matching profile's `access` field in `~/.lark-channel/config.json`. Empty lists mean nobody from that list, not open access. This is a profile-field snippet; do not replace the whole `config.json` with it:
+profile 可以设置 `workspaces.default`。新建 profile 时传 `--workspace <path>`；省略时 Bridge 会创建 profile 托管目录：
 
 ```json
 {
-  "schemaVersion": 2,
-  "profiles": {
-    "claude": {
-      "agentKind": "claude",
-      "access": {
-        "allowedUsers": ["ou_xxxxxxxxxxxxx"],
-        "allowedChats": ["oc_xxxxxxxxxxxxx"],
-        "admins": ["ou_xxxxxxxxxxxxx"],
-        "requireMentionInGroup": true
-      }
-    }
+  "workspaces": {
+    "default": "/Users/me/.lark-channel-workspaces/claude/default"
   }
 }
 ```
 
-`allowedUsers` / `admins` take user `open_id`s; `allowedChats` takes group `chat_id`s. The easiest way to find an ID by hand: have the person message the bot (or `@` it in the group), then check the active profile's log:
+所选路径必须存在且是目录，不能是 `/`、Home 根目录、系统目录或临时目录根。工作目录只是 agent 的当前目录，不等同于文件系统 sandbox。
+
+## Web 控制台和后台服务
+
+### 本机 Web 控制台
 
 ```bash
-grep '"event":"enter"' ~/.lark-channel/profiles/<profile>/logs/bridge-$(date +%Y%m%d).jsonl | tail -5
+lark-channel-bridge run --web-ui
+lark-channel-bridge ui --print
 ```
 
-Each line carries `chatId` (group / DM id) and `senderId` (user `open_id`). After a manual edit, **restart the bridge** or send `/reconnect` from an allowed admin context to apply it. For day-to-day tweaks `/invite` / `/config` are easier; direct edits are mainly for deployment scripts that pre-seed access.
+控制台只绑定 `127.0.0.1`，可查看和管理所有 profile、启动/停止 bot、编辑配置、完成用户授权、管理群，以及在会议页入会或离会。`ui --print` 只打印地址，不自动打开浏览器。
 
-## Cloud-doc comments
+### 后台运行
 
-Cloud-doc comments do not need a separate workspace binding or document allowlist. In supported document comments, mention the bot and the bridge replies in the same thread. Comment runs reuse the document session key and fall back to the user home directory when no document cwd was previously recorded.
-
-## FAQ
-
-**The bot stays silent or the local CLI never replies.** Usually the local `claude` or `codex` CLI is not logged in, or the current session points to a working directory that no longer exists. Send `/status` to inspect; `/new` often fixes it by starting a fresh session.
-
-**The agent subprocess looks frozen (card stuck on the last frame).** The bridge supports an idle watchdog: if the agent emits nothing for N minutes, the process is killed and the card is annotated with the auto-termination reason. Disabled by default. Enable with `/config` globally, or `/timeout 10` for the current session; `/timeout off` disables it for the session; `/timeout default` clears the session override.
-
-**The agent says it cannot see an image I sent.** Upgrade to the latest version. Releases before 0.1.0 had a filename-dedup bug.
-
-## Testing and CI
-
-Local checks:
+确认 `run` 前台工作后，用 OS 服务常驻：
 
 ```bash
+lark-channel-bridge start
+lark-channel-bridge status
+lark-channel-bridge restart
+lark-channel-bridge stop
+lark-channel-bridge unregister
+```
+
+这是按 profile 注册的 **per-profile service**：
+
+- macOS：launchd 用户代理 `ai.lark-channel-bridge.bot.<profile>`。
+- Linux：systemd 用户单元 `lark-channel-bridge.bot.<profile>.service`。
+- Windows：Task Scheduler 任务 `LarkChannelBridge.Bot.<profile>`，启动器是 `.cmd`。
+
+服务命令不能依赖临时 `npx` 路径，建议全局安装。daemon 日志在 `~/.lark-channel/profiles/<profile>/logs/daemon/`。
+
+### 宿主 CLI 命令
+
+| 命令 | 示例 | 效果 |
+|---|---|---|
+| `run` | `lark-channel-bridge run --agent codex --workspace ~/work` | 前台启动一个 profile；首次运行时执行扫码和初始化。 |
+| `start` | `lark-channel-bridge start --profile codex` | 安装（如需要）并启动指定 profile 的 OS 服务。 |
+| `stop` | `lark-channel-bridge stop --profile codex` | 停止服务并禁用自动启动，保留服务定义。 |
+| `restart` | `lark-channel-bridge restart --profile codex` | 重启指定 profile 的 OS 服务。 |
+| `status` | `lark-channel-bridge status --profile codex` | 显示服务 PID、最近退出信息和日志路径。 |
+| `unregister` | `lark-channel-bridge unregister --profile codex` | 删除 OS 服务注册。 |
+| `migrate` | `lark-channel-bridge migrate` | 将旧版配置和状态迁移到当前 profile 布局。 |
+| `ps` | `lark-channel-bridge ps` | 列出本机正在运行的 Bridge 进程。 |
+| `kill` | `lark-channel-bridge kill 2` | 向指定进程发送 SIGTERM；宽限期后仍未退出才升级终止。 |
+| `ui` | `lark-channel-bridge ui --profile codex` | 打开本机 Web 控制台；加 `--print` 只打印 URL。 |
+| `--help` | `lark-channel-bridge --help` | 显示 Commander 提供的 CLI 帮助。 |
+| `--version` | `lark-channel-bridge --version` | 显示当前安装版本。 |
+
+`run` 和 `start` 常用选项也都是可组合的：
+
+| 选项 | 示例 | 效果 |
+|---|---|---|
+| `--profile <name>` | `lark-channel-bridge run --profile codex` | 运行指定 profile；省略时使用 active profile。 |
+| `--agent claude\|codex` | `lark-channel-bridge run --agent claude` | 首次初始化时选择 agent 类型；已有 profile 的类型不能在运行时偷偷切换。 |
+| `--workspace <path>` | `lark-channel-bridge run --workspace ~/work` | 首次创建 profile 时设置 `workspaces.default`。 |
+| `--web-ui` | `lark-channel-bridge start --web-ui` | 以 supervisor + Web 控制台服务运行并托管所有 profile，而不是只运行一个 profile。 |
+| `--config <path>` | `lark-channel-bridge run --config ./config.json` | 使用指定 root config 文件。 |
+| `--app-id <id>` | `lark-channel-bridge run --app-id cli_xxx` | 使用已有飞书应用，跳过创建应用步骤。 |
+| `--app-secret <secret>` | `lark-channel-bridge run --app-id cli_xxx --app-secret "$APP_SECRET"` | 非交互地提供 App Secret；共享机器优先交互输入。 |
+| `--tenant feishu\|lark` | `lark-channel-bridge run --tenant lark` | 选择飞书中国版或 Lark 国际版租户，默认 `feishu`。 |
+| `--skip-check-lark-cli` | `lark-channel-bridge start --skip-check-lark-cli` | 跳过 lark-cli 自动安装和绑定预检；仅在你已完成本机配置时使用。 |
+
+`migrate` 支持 `--config`、`--profile` 和 `--agent`，效果是把旧版状态迁移到指定 profile。服务命令支持 `--profile` 和 `--web-ui`；`--web-ui` 明确指向 supervisor 服务。
+
+### 加密 Secret 管理
+
+Secret 存在本机加密 keystore（`~/.lark-channel/secrets.enc`），以下命令不会把 Secret 打印到终端：
+
+| 命令 | 示例 | 效果 |
+|---|---|---|
+| `secrets set` | `lark-channel-bridge secrets set --app-id cli_xxx --profile codex` | 隐藏输入 App Secret 并加密保存。 |
+| `secrets list` | `lark-channel-bridge secrets list --profile codex` | 只列出已保存的 App ID，不显示 Secret。 |
+| `secrets get` | `printf '{"appId":"cli_xxx"}' \| lark-channel-bridge secrets get` | 按 lark-cli exec-provider 协议从 stdin 读取 JSON，并向 stdout 返回 JSON。 |
+| `secrets remove` | `lark-channel-bridge secrets remove --app-id cli_xxx --profile codex` | 从加密 keystore 删除指定 App ID。 |
+
+### Profile 管理
+
+只有需要多套应用、同时运行 Claude/Codex 或脚本化部署时才需要 profile 管理：
+
+```bash
+lark-channel-bridge profile create claude --agent claude
+lark-channel-bridge profile create codex --agent codex --workspace ~/work
+lark-channel-bridge profile list
+lark-channel-bridge profile use codex
+```
+
+| 命令 | 示例 | 效果 |
+|---|---|---|
+| `profile create` | `lark-channel-bridge profile create codex --agent codex` | 创建 profile，并通过二维码或现有应用凭据初始化。 |
+| `profile list` | `lark-channel-bridge profile list` | 列出所有已配置 profile。 |
+| `profile use` | `lark-channel-bridge profile use codex` | 将后续默认启动目标切换为 `codex`。 |
+| `profile remove` | `lark-channel-bridge profile remove old` | 归档 profile 和本地状态；不会立即永久删除。即 `profile remove`。 |
+| `profile remove --purge --yes` | `lark-channel-bridge profile remove old --purge --yes` | 跳过归档，永久删除该 profile 的本地状态。 |
+| `profile export` | `lark-channel-bridge profile export codex --output ./codex.json` | 导出脱敏 profile JSON；文件已存在时需要 `--force`。即 `profile export`。 |
+| `--include-secrets --yes` | `lark-channel-bridge profile export codex --include-secrets --yes` | 明确确认后导出 Secret 配置和 App Secret；请妥善保护输出文件。 |
+
+删除最后一个 profile 会清空 root config；之后可以重新创建同名 profile。profile 类型创建错误时，先 `stop` 或 `unregister --profile <name>`，再删除并用正确的 `--agent` 重建。
+
+## 数据目录和环境变量
+
+| 路径 | 内容 |
+|---|---|
+| `~/.lark-channel/config.json` | root config，包含 profiles 和 active profile。 |
+| `~/.lark-channel/active-profile` | 最近选择的 profile。 |
+| `~/.lark-channel/profiles/<profile>/sessions.json` | 会话状态。 |
+| `~/.lark-channel/profiles/<profile>/sessions.json.catalog.json` | agent-aware 会话索引。 |
+| `~/.lark-channel/profiles/<profile>/workspaces.json` | 当前和命名工作目录绑定。 |
+| `~/.lark-channel/profiles/<profile>/secrets.enc` | profile 本地加密 Secret。 |
+| `~/.lark-channel/profiles/<profile>/lark-cli/` | 当前 profile 的 lark-cli 目录。 |
+| `~/.lark-channel/profiles/<profile>/media/` | 附件缓存。 |
+| `~/.lark-channel/profiles/<profile>/logs/` | 结构化运行日志。 |
+| `~/.lark-channel/registry/processes.json` | 本机进程注册表。 |
+| `~/.lark-channel/registry/locks/` | profile 和 app 锁。 |
+
+```bash
+# 将整棵本地状态目录迁移到指定位置
+LARK_CHANNEL_HOME=/path/to/state lark-channel-bridge start
+
+# 调整日志保留天数
+LARK_CHANNEL_LOG_DAYS=14 lark-channel-bridge start
+```
+
+## 常见问题
+
+**Bot 没有回复。** 先发 `/status`，确认当前 cwd 存在、`claude`/`codex` 已登录、profile 正在运行；群聊确认已 @bot 且群已通过 `/invite group` 开放。必要时发 `/new` 重建会话。
+
+**卡片停在最后一帧。** 默认探活关闭。用 `/timeout 10` 为当前 scope 开启 10 分钟 watchdog，或在 `/config` 设置全局值；`/timeout off` 关闭，`/timeout default` 恢复全局值。
+
+**Codex 恢复提示 thread 被占用。** 等另一个 Codex 进程结束后重试；如果确定要接管，在恢复卡中由管理员确认接管，Bridge 会终止占用进程再恢复。
+
+**agent 看不到附件。** 检查附件大小和数量是否超过 profile 策略，并确认 `~/.lark-channel/profiles/<profile>/media/` 可写。再发一条带附件的新消息测试。
+
+**群里关闭 @ 后仍收不到消息。** 飞书应用必须有 `im:message.group_msg` 权限；重新打开 `/config` 提交时，Bridge 会提示一键授权链接。
+
+## 开发和验证
+
+```bash
+pnpm install --frozen-lockfile
 pnpm test
 pnpm typecheck
 pnpm build
 ```
 
-`pnpm test` includes unit, integration, and process-level adapter tests. CI runs on macOS, Ubuntu, and Windows with `pnpm install --frozen-lockfile`, `pnpm test`, `pnpm typecheck`, and `pnpm build`.
+`pnpm test` 包含 unit、integration 和 process 级 adapter 测试；CI 覆盖 macOS、Ubuntu 和 Windows。提交前建议执行 `git diff --check`。
 
-## Optional telemetry
+默认不会上传指标、日志或消息，也不依赖遥测服务。需要接入自有监控时，可显式设置 `LARK_CHANNEL_TELEMETRY_MODULE`；缺失或异常的适配器会自动降级为 noop，不会阻止 Bridge 启动。
 
-By default the bridge reports **nothing**: no metrics, no logs leave your machine, and it pulls in zero telemetry dependencies. The hook below is inert unless you opt in.
-
-To wire up your own monitoring, point an environment variable at a module that default-exports (or exports `createAdapter`) an `AdapterFactory`:
-
-```bash
-LARK_CHANNEL_TELEMETRY_MODULE=your-telemetry-package lark-channel-bridge start
-```
-
-That module receives every `log.*` event plus error/metric hooks and forwards them wherever you like. The interface is exported from the package root:
-
-```ts
-import type { AdapterFactory, TelemetryAdapter, TelemetryEvent } from 'lark-channel-bridge';
-
-const createAdapter: AdapterFactory = (meta) => ({
-  emit(event) {/* ship event */},
-  recordError(err, ctx) {/* ship exception */},
-  recordMetric(name, value, tags) {/* ship metric */},
-  flush(timeoutMs) {/* drain buffered events */},
-});
-export default createAdapter;
-```
-
-A missing module, a bad factory, or a throwing adapter all degrade to noop — telemetry can never stop the bridge from starting or break logging.
-
-## License
+## 许可证
 
 [MIT](./LICENSE)
-
-<img src="./assets/feedback-group-qr.png" alt="Feedback group QR code" width="360">
