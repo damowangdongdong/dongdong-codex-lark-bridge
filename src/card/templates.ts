@@ -342,7 +342,7 @@ export function resumeCard(cwd: string, entries: ResumeEntry[]): object {
     const displayId = e.displayId ?? e.sessionId;
     elements.push(
       divMd(
-        `**${i + 1}.** ${escapeMd(e.preview)}${marker}\n\`${displayId.slice(0, 8)}…\` · ${e.relTime} · ${escapeMd(detail)}`,
+        `**${i + 1}.** ${escapeMd(e.preview)}${marker}\n\`${escapeCode(displayId)}\` · ${e.relTime} · ${escapeMd(detail)}`,
       ),
     );
     elements.push(

@@ -1744,6 +1744,7 @@ async function handleResume(args: string, ctx: CommandContext): Promise<void> {
         const nonce = issueResumeCandidate(identity, { threadId: thread.threadId });
         return {
           sessionId: nonce,
+          displayId: thread.threadId,
           preview: thread.name || thread.preview,
           relTime: formatRelTime(thread.updatedAtMs),
           detail: `Codex · ${thread.source}`,

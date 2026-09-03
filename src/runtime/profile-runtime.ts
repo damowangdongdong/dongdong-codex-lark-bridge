@@ -60,6 +60,7 @@ export interface ResolveProfileRuntimeOptions {
   appId?: string;
   appSecret?: string;
   tenant?: string;
+  appName?: string;
   allowBootstrap?: boolean;
   selectAgent?: (detected: DetectedAgent[]) => AgentKind | undefined | Promise<AgentKind | undefined>;
   handleActiveBridgeMigrationConflict?: (
@@ -435,7 +436,7 @@ async function resolveBootstrapAppConfig(opts: ResolveProfileRuntimeOptions): Pr
           '或传入 --app-id 和 --app-secret。',
       );
     }
-    return runRegistrationWizard();
+    return runRegistrationWizard({ ...(opts.appName ? { appName: opts.appName } : {}) });
   }
   let appSecret = opts.appSecret;
   if (!appSecret) {

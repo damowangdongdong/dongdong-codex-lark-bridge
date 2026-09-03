@@ -90,12 +90,14 @@ profile
   .option('--app-id <id>', 'use an existing Lark/Feishu app instead of QR app creation')
   .option('--app-secret <secret>', 'App Secret for --app-id; prefer interactive input on shared machines')
   .option('--tenant <tenant>', 'tenant for --app-id (feishu or lark; default feishu)')
+  .option('--app-name <name>', 'pre-fill the new app display name during QR registration')
   .action(async (name: string, opts: {
     agent?: string;
     workspace?: string;
     appId?: string;
     appSecret?: string;
     tenant?: string;
+    appName?: string;
   }) => {
     await runProfileCreate(name, opts);
   });

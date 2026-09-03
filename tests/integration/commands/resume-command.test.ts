@@ -244,8 +244,8 @@ describe('agent-aware resume commands', () => {
     const rendered = JSON.stringify(card);
     expect(rendered).toContain('alpha prompt');
     expect(rendered).toContain('beta prompt');
-    expect(rendered).not.toContain('thread-alpha-secret');
-    expect(rendered).not.toContain('thread-beta-secret');
+    expect(rendered).toContain('thread-alpha-secret');
+    expect(rendered).toContain('thread-beta-secret');
 
     const nonces = resumeArgsFromCard(card);
     expect(nonces).toHaveLength(2);
