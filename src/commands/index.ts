@@ -933,12 +933,15 @@ async function handleCodexGoal(args: string, ctx: CommandContext): Promise<void>
     status: 'active',
   });
   const goal = parseCodexGoal(recordValue(result)?.goal);
-  if (createdNewThread) {
+  const startedGoalTurn = !ctx.activeRuns.get(ctx.scope);
+  if (startedGoalTurn) {
     await codexRpc(ctx, 'turn/start', {
       ...codexTurnStartParams(ctx, remote.threadId, '请开始执行当前 goal。'),
       clientUserMessageId: CODEX_GOAL_CONTINUATION_CLIENT_ID,
       turnTrigger: 'goal',
     });
+  }
+  if (createdNewThread) {
     await reply(
       ctx,
       goal
@@ -947,7 +950,8 @@ async function handleCodexGoal(args: string, ctx: CommandContext): Promise<void>
     );
     return;
   }
-  await reply(ctx, goal ? `✓ 当前 goal 已更新。\n\n${formatGoalSummary(goal)}` : '✓ 当前 goal 已更新。');
+  const action = startedGoalTurn ? '已更新并启动' : '已更新，将由当前 turn 继续执行';
+  await reply(ctx, goal ? `✓ 当前 goal ${action}。\n\n${formatGoalSummary(goal)}` : `✓ 当前 goal ${action}。`);
 }
 
 async function handleCodexSkill(args: string, ctx: CommandContext): Promise<void> {

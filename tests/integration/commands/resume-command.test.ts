@@ -1015,9 +1015,17 @@ describe('agent-aware resume commands', () => {
     });
 
     await expect(h.run('/goal finish tests')).resolves.toBe(true);
-    expect(h.agent.appServerRequests.at(-1)).toMatchObject({
+    expect(h.agent.appServerRequests.at(-2)).toMatchObject({
       method: 'thread/goal/set',
       params: { threadId: 'thread-current', objective: 'finish tests', status: 'active' },
+    });
+    expect(h.agent.appServerRequests.at(-1)).toMatchObject({
+      method: 'turn/start',
+      params: {
+        threadId: 'thread-current',
+        clientUserMessageId: 'lark-channel-bridge:goal-continuation',
+        turnTrigger: 'goal',
+      },
     });
 
     await expect(h.run('/model gpt-test')).resolves.toBe(true);
@@ -1203,6 +1211,32 @@ describe('agent-aware resume commands', () => {
     expect(lastMarkdown(h.channel)).toContain('Pursuing goal (1m 5s)');
     expect(lastMarkdown(h.channel)).toContain('1,250 / 20,000 tokens');
     expect(lastMarkdown(h.channel)).toContain('Finish the release');
+  });
+
+  it('updates a goal without starting a duplicate turn when the scope is active', async () => {
+    const h = await createHarness('codex');
+    const activeRun = Object.assign(
+      h.agent.run({ runId: 'run-active', prompt: 'running' }),
+      {
+        remoteSession: () => ({
+          endpoint: h.agent.appServerEndpointValue,
+          threadId: 'thread-current',
+        }),
+      },
+    );
+    h.activeRuns.register('chat-1', activeRun);
+
+    await expect(h.run('/goal revised objective')).resolves.toBe(true);
+
+    expect(h.agent.appServerRequests).toEqual([{
+      method: 'thread/goal/set',
+      params: {
+        threadId: 'thread-current',
+        objective: 'revised objective',
+        status: 'active',
+      },
+    }]);
+    expect(lastMarkdown(h.channel)).toContain('将由当前 turn 继续执行');
   });
 
   it('maps the remaining app-server-backed Codex commands and aliases', async () => {
