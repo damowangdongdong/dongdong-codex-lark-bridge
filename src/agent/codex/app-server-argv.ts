@@ -7,6 +7,8 @@ export function buildCodexAppServerArgs(input: BuildCodexAppServerArgsInput): st
   return [
     '-c',
     'shell_environment_policy.inherit="all"',
+    '-c',
+    'tools.update_plan.enabled=true',
     'app-server',
     '--listen',
     input.endpoint,

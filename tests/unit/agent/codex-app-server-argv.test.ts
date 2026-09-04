@@ -6,6 +6,8 @@ describe('Codex app-server argv contract', () => {
     expect(buildCodexAppServerArgs({ endpoint: 'unix:///tmp/codex.sock' })).toEqual([
       '-c',
       'shell_environment_policy.inherit="all"',
+      '-c',
+      'tools.update_plan.enabled=true',
       'app-server',
       '--listen',
       'unix:///tmp/codex.sock',
@@ -16,6 +18,8 @@ describe('Codex app-server argv contract', () => {
     expect(buildCodexAppServerArgs({ endpoint: 'ws://127.0.0.1:4500' })).toEqual([
       '-c',
       'shell_environment_policy.inherit="all"',
+      '-c',
+      'tools.update_plan.enabled=true',
       'app-server',
       '--listen',
       'ws://127.0.0.1:4500',
