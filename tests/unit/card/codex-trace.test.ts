@@ -3,7 +3,14 @@ import { renderCodexHistoryCards, renderRunTraceCards } from '../../../src/card/
 import { initialState, reduce, type RunState } from '../../../src/card/run-state.js';
 import type { AgentEvent } from '../../../src/agent/types.js';
 import { buildAgentPrompt } from '../../../src/agent/prompt.js';
-import { prefixBridgeSystemPrompt } from '../../../src/agent/bridge-system-prompt.js';
+import { buildBridgeSystemPrompt } from '../../../src/agent/bridge-system-prompt.js';
+
+function legacyBridgePrompt(
+  prompt: string,
+  identity: { openId: string; name?: string },
+): string {
+  return `${buildBridgeSystemPrompt(identity)}\n\n## user_message\n\n${prompt}`;
+}
 
 describe('Codex trace cards', () => {
   it('keeps distinct reasoning, terminal input, commentary, tool input, and tool output sections', () => {
@@ -64,7 +71,7 @@ describe('Codex trace cards', () => {
   });
 
   it('hides bridge metadata from live and resumed user-input sections', () => {
-    const wrapped = prefixBridgeSystemPrompt(buildAgentPrompt({
+    const wrapped = legacyBridgePrompt(buildAgentPrompt({
       context: {
         chatId: 'oc_internal',
         chatType: 'group',
@@ -131,7 +138,7 @@ describe('Codex trace cards', () => {
   });
 
   it('redacts embedded bridge prompts without treating quoted input as the current user message', () => {
-    const wrapped = prefixBridgeSystemPrompt(buildAgentPrompt({
+    const wrapped = legacyBridgePrompt(buildAgentPrompt({
       context: {
         chatId: 'oc_quoted',
         chatType: 'group',
@@ -222,7 +229,7 @@ describe('Codex trace cards', () => {
 
 describe('Codex resumed-history cards', () => {
   it('uses cleaned user input for wrapped thread names and previews', () => {
-    const wrappedName = prefixBridgeSystemPrompt(buildAgentPrompt({
+    const wrappedName = legacyBridgePrompt(buildAgentPrompt({
       context: {
         chatId: 'oc_internal',
         chatType: 'group',
@@ -232,7 +239,7 @@ describe('Codex resumed-history cards', () => {
       instructions: ['internal bridge instruction'],
       userInput: '真实历史标题',
     }), { openId: 'ou_bot_internal', name: 'Bridge' });
-    const wrappedPreview = prefixBridgeSystemPrompt(buildAgentPrompt({
+    const wrappedPreview = legacyBridgePrompt(buildAgentPrompt({
       context: {
         chatId: 'oc_preview',
         chatType: 'p2p',

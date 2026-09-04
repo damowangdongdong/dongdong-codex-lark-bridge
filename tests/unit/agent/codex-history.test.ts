@@ -7,7 +7,14 @@ import {
   listCodexThreadHistory,
 } from '../../../src/session/codex-history.js';
 import { buildAgentPrompt } from '../../../src/agent/prompt.js';
-import { prefixBridgeSystemPrompt } from '../../../src/agent/bridge-system-prompt.js';
+import { buildBridgeSystemPrompt } from '../../../src/agent/bridge-system-prompt.js';
+
+function legacyBridgePrompt(
+  prompt: string,
+  identity: { openId: string; name?: string },
+): string {
+  return `${buildBridgeSystemPrompt(identity)}\n\n## user_message\n\n${prompt}`;
+}
 
 interface FakeCodex {
   dir: string;
@@ -134,7 +141,7 @@ describe('Codex thread history provider', () => {
   });
 
   it('summarizes bridge-prefixed Codex names and previews using the real user input section', async () => {
-    const wrapped = prefixBridgeSystemPrompt(buildAgentPrompt({
+    const wrapped = legacyBridgePrompt(buildAgentPrompt({
       context: {
         chatId: 'oc_secret',
         chatType: 'p2p',

@@ -1,3 +1,5 @@
+import type { AgentAdditionalContext } from './types';
+
 export type BridgePromptSource = 'im' | 'card' | 'comment';
 
 export const BRIDGE_SYSTEM_PROMPT_HEADING = '# lark-channel-bridge 运行约定';
@@ -87,6 +89,11 @@ export interface BuildAgentPromptInput {
   attachments?: BridgePromptAttachment[];
 }
 
+export interface BuiltCodexPrompt {
+  prompt: string;
+  additionalContext?: AgentAdditionalContext;
+}
+
 export function buildAgentPrompt(input: BuildAgentPromptInput): string {
   const sections = [
     promptSection('bridge_context', input.context),
@@ -114,6 +121,66 @@ export function buildAgentPrompt(input: BuildAgentPromptInput): string {
   return sections.filter(Boolean).join('\n\n');
 }
 
+/**
+ * Keep Codex's user input identical to what the human wrote. Feishu-only data
+ * is supplied through app-server's native additionalContext field, and only
+ * when the transport added information that is not present in the message.
+ */
+export function buildCodexPrompt(input: BuildAgentPromptInput): BuiltCodexPrompt {
+  const application: Record<string, unknown> = {};
+  const messageContext: Record<string, unknown> = {};
+  const mentions = (input.context.mentions ?? []).filter(
+    (mention) => !input.context.botOpenId || mention.openId !== input.context.botOpenId,
+  );
+  const needsChannelContext = input.context.senderType === 'bot' || mentions.length > 0;
+
+  if (needsChannelContext) {
+    application.channel = {
+      chatId: input.context.chatId,
+      chatType: input.context.chatType,
+      senderId: input.context.senderId,
+      ...(input.context.senderName ? { senderName: input.context.senderName } : {}),
+      ...(input.context.senderType ? { senderType: input.context.senderType } : {}),
+      ...(input.context.botOpenId ? { botOpenId: input.context.botOpenId } : {}),
+      ...(mentions.length > 0 ? { mentions } : {}),
+      ...(input.context.threadId ? { threadId: input.context.threadId } : {}),
+    };
+  }
+  if (input.instructions && input.instructions.length > 0) {
+    application.notes = input.instructions;
+  }
+  if (input.topicContext && input.topicContext.length > 0) {
+    messageContext.topicMessages = input.topicContext;
+  }
+  if (input.quotedMessages && input.quotedMessages.length > 0) {
+    messageContext.quotedMessages = input.quotedMessages;
+  }
+  if (input.interactiveCards && input.interactiveCards.length > 0) {
+    messageContext.interactiveCards = input.interactiveCards;
+  }
+  const attachments = compactCodexAttachments(input.attachments ?? []);
+  if (attachments.length > 0) messageContext.attachments = attachments;
+
+  const additionalContext: AgentAdditionalContext = {};
+  if (Object.keys(application).length > 0) {
+    additionalContext['lark-channel'] = {
+      kind: 'application',
+      value: safeJsonStringify(application),
+    };
+  }
+  if (Object.keys(messageContext).length > 0) {
+    additionalContext['lark-message-context'] = {
+      kind: 'untrusted',
+      value: safeJsonStringify(messageContext),
+    };
+  }
+
+  return {
+    prompt: input.userInput,
+    ...(Object.keys(additionalContext).length > 0 ? { additionalContext } : {}),
+  };
+}
+
 export function promptSection(tag: string, value: unknown): string {
   return `<${tag}>\n${safeJsonStringify(value)}\n</${tag}>`;
 }
@@ -125,6 +192,21 @@ export function safeJsonStringify(value: unknown): string {
     .replace(/&/g, '\\u0026')
     .replace(/\u2028/g, '\\u2028')
     .replace(/\u2029/g, '\\u2029');
+}
+
+function compactCodexAttachments(
+  attachments: BridgePromptAttachment[],
+): Array<Record<string, unknown>> {
+  return attachments
+    .filter((attachment) => attachment.kind !== 'image' || attachment.decision !== 'accepted')
+    .map((attachment) => ({
+      kind: attachment.kind,
+      ...(attachment.path ? { path: attachment.path } : {}),
+      ...(attachment.mime ? { mime: attachment.mime } : {}),
+      ...(attachment.requiredness ? { requiredness: attachment.requiredness } : {}),
+      ...(attachment.decision ? { decision: attachment.decision } : {}),
+      ...(attachment.rejectionReason ? { rejectionReason: attachment.rejectionReason } : {}),
+    }));
 }
 
 /** Return only the human-authored text from a structured bridge prompt. */

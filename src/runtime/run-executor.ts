@@ -98,6 +98,7 @@ export class RunExecutor {
     const runOptions = {
       runId,
       prompt: input.policy.prompt,
+      additionalContext: input.policy.additionalContext,
       cwd: input.policy.cwdRealpath,
       sessionId: input.sessionId,
       threadId: input.threadId,

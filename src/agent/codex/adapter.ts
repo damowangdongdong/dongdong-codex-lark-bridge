@@ -3,12 +3,11 @@ import { loadCodexProfileConfig, resolveCodexHome } from '../../config/codex-pro
 import type { SandboxMode } from '../../config/profile-schema';
 import { log } from '../../core/logger';
 import { SpawnFailed } from '../../runtime/errors';
-import { prefixBridgeSystemPrompt } from '../bridge-system-prompt';
 import { buildLarkChannelEnv, type LarkChannelEnvContext } from '../lark-channel-env';
 import { checkAgentAvailability, type AgentAvailability } from '../preflight';
 import type {
   AgentAdapter,
-  AgentBotIdentity,
+  AgentAdditionalContext,
   AgentEvent,
   AgentExternalRun,
   AgentGoal,
@@ -49,14 +48,9 @@ export class CodexAdapter implements AgentAdapter {
   private readonly threadGoals = new Map<string, AgentGoal>();
   private readonly externalRuns = new Map<string, CodexExternalRun>();
   private readonly externalRunListeners = new Set<(run: AgentExternalRun) => void>();
-  private botIdentity: AgentBotIdentity | undefined;
 
   constructor(options: CodexAdapterOptions) {
     this.options = options;
-  }
-
-  setBotIdentity(identity: AgentBotIdentity): void {
-    this.botIdentity = identity;
   }
 
   async isAvailable(): Promise<boolean> {
@@ -111,7 +105,6 @@ export class CodexAdapter implements AgentAdapter {
             }),
           }
         : {}),
-      botIdentity: this.botIdentity,
       initialGoal: options.threadId
         ? this.threadGoals.get(remoteThreadKey(profile, options.threadId))
         : undefined,
@@ -283,7 +276,6 @@ interface CodexAppServerRunInput {
   client: CodexAppServerClient;
   options: AgentRunOptions & { cwd: string; sandbox: SandboxMode };
   loadProfileConfig?: () => Promise<Record<string, unknown>>;
-  botIdentity?: AgentBotIdentity;
   initialGoal?: AgentGoal;
   rememberGoal(threadId: string, goal: AgentGoal | undefined): void;
   setBridgeThreadActive(profile: string | undefined, threadId: string, active: boolean): void;
@@ -296,7 +288,6 @@ class CodexAppServerRun implements AgentRun {
   private readonly client: CodexAppServerClient;
   private readonly options: CodexAppServerRunInput['options'];
   private readonly loadProfileConfig: CodexAppServerRunInput['loadProfileConfig'];
-  private readonly botIdentity: AgentBotIdentity | undefined;
   private readonly initialGoal: AgentGoal | undefined;
   private readonly rememberGoal: CodexAppServerRunInput['rememberGoal'];
   private readonly setBridgeThreadActive: CodexAppServerRunInput['setBridgeThreadActive'];
@@ -316,7 +307,6 @@ class CodexAppServerRun implements AgentRun {
     this.client = input.client;
     this.options = input.options;
     this.loadProfileConfig = input.loadProfileConfig;
-    this.botIdentity = input.botIdentity;
     this.initialGoal = input.initialGoal;
     this.rememberGoal = input.rememberGoal;
     this.setBridgeThreadActive = input.setBridgeThreadActive;
@@ -334,7 +324,11 @@ class CodexAppServerRun implements AgentRun {
     void this.start();
   }
 
-  async steer(prompt: string, images: readonly string[] = []): Promise<void> {
+  async steer(
+    prompt: string,
+    images: readonly string[] = [],
+    additionalContext?: AgentAdditionalContext,
+  ): Promise<void> {
     if (!this.threadId || !this.turnId || this.terminal) {
       throw new Error('Codex turn is not active');
     }
@@ -342,6 +336,7 @@ class CodexAppServerRun implements AgentRun {
       threadId: this.threadId,
       expectedTurnId: this.turnId,
       input: userInput(prompt, images),
+      ...(additionalContext ? { additionalContext } : {}),
     });
   }
 
@@ -405,10 +400,10 @@ class CodexAppServerRun implements AgentRun {
       this.bridgeThreadMarked = true;
       const turnResponse = await this.client.request('turn/start', {
         threadId,
-        input: userInput(
-          prefixBridgeSystemPrompt(this.options.prompt, this.botIdentity),
-          this.options.images,
-        ),
+        input: userInput(this.options.prompt, this.options.images),
+        ...(this.options.additionalContext
+          ? { additionalContext: this.options.additionalContext }
+          : {}),
         cwd: this.options.cwd,
         approvalPolicy: 'never',
         sandboxPolicy: sandboxPolicy(this.options.sandbox, this.options.cwd),
@@ -546,12 +541,17 @@ class CodexExternalRun implements AgentRun {
     });
   }
 
-  async steer(prompt: string, images: readonly string[] = []): Promise<void> {
+  async steer(
+    prompt: string,
+    images: readonly string[] = [],
+    additionalContext?: AgentAdditionalContext,
+  ): Promise<void> {
     if (this.terminal) throw new Error('Codex turn is not active');
     await this.client.request('turn/steer', {
       threadId: this.binding.threadId,
       expectedTurnId: this.turnId,
       input: userInput(prompt, images),
+      ...(additionalContext ? { additionalContext } : {}),
     });
   }
 

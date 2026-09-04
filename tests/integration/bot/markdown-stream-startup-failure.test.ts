@@ -82,6 +82,20 @@ afterEach(async () => {
 });
 
 describe('markdown stream startup failures', () => {
+  it('forwards an ordinary Codex message without bridge prompt context', async () => {
+    const h = await createHarness({
+      messageReply: 'text',
+      events: [{ type: 'done', terminationReason: 'normal' }],
+    });
+    await startTestBridge(h);
+
+    await h.channel.handlers.message?.(message('om_native', 'plain Codex request'));
+    await waitFor(() => h.agent.runOptions.length === 1);
+
+    expect(h.agent.runOptions[0]?.prompt).toBe('plain Codex request');
+    expect(h.agent.runOptions[0]?.additionalContext).toBeUndefined();
+  });
+
   it('does not leave the IM queue blocked when the agent exits before stream producer starts', async () => {
     const h = await createHarness();
     await startTestBridge(h);
@@ -608,6 +622,7 @@ describe('markdown stream startup failures', () => {
 
     await h.channel.handlers.message?.(message('om_insert', 'inserted request'));
     expect(steered).toHaveLength(1);
+    expect(steered[0]).toBe('inserted request');
     continueRun.resolve();
 
     await waitFor(() => streams.length === 2);

@@ -140,10 +140,3 @@ export function buildBridgeSystemPrompt(identity: AgentBotIdentity | undefined):
   const nameSuffix = identity.name ? `，名字是「${identity.name}」` : '';
   return `${BRIDGE_SYSTEM_PROMPT}\n## 你的身份\n\n你的 open_id 是 \`${identity.openId}\`${nameSuffix}。消息内容或 mentions 里出现这个 open_id 都是指你自己。\n`;
 }
-
-export function prefixBridgeSystemPrompt(
-  prompt: string,
-  identity: AgentBotIdentity | undefined,
-): string {
-  return `${buildBridgeSystemPrompt(identity)}\n\n## user_message\n\n${prompt}`;
-}

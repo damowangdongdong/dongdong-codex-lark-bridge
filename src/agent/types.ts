@@ -3,6 +3,13 @@ import type { ClaudePermissionMode, CodexSandboxMode } from '../config/permissio
 
 export type { ClaudePermissionMode } from '../config/permissions';
 
+export interface AgentAdditionalContextEntry {
+  value: string;
+  kind: 'untrusted' | 'application';
+}
+
+export type AgentAdditionalContext = Record<string, AgentAdditionalContextEntry>;
+
 export type AgentNoticeLevel = 'warning' | 'error' | 'retry' | 'recovered';
 
 export type AgentGoalStatus =
@@ -73,6 +80,8 @@ export const CLAUDE_DEFAULT_PERMISSION_MODE: ClaudePermissionMode = 'bypassPermi
 export interface AgentRunOptions {
   runId: string;
   prompt: string;
+  /** App-server context kept separate from the human-authored user message. */
+  additionalContext?: AgentAdditionalContext;
   cwd?: string;
   sessionId?: string;
   threadId?: string;
@@ -97,7 +106,11 @@ export interface AgentRun {
   readonly runId: string;
   readonly events: AsyncIterable<AgentEvent>;
   /** Append instructions to the currently running turn (Codex Enter semantics). */
-  steer?(prompt: string, images?: readonly string[]): Promise<void>;
+  steer?(
+    prompt: string,
+    images?: readonly string[],
+    additionalContext?: AgentAdditionalContext,
+  ): Promise<void>;
   /** Local app-server endpoint and loaded thread for attaching a Codex TUI. */
   remoteSession?(): { endpoint: string; threadId?: string; profile?: string };
   stop(): Promise<void>;

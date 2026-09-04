@@ -1,5 +1,6 @@
 import type {
   AgentAdapter,
+  AgentAdditionalContext,
   AgentBotIdentity,
   AgentEvent,
   AgentRun,
@@ -10,7 +11,11 @@ export interface FakeAgentRun extends AgentRun {
   readonly opts: AgentRunOptions;
   readonly stopped: boolean;
   readonly waitForExitCalls: number;
-  readonly steered: Array<{ prompt: string; images: readonly string[] }>;
+  readonly steered: Array<{
+    prompt: string;
+    images: readonly string[];
+    additionalContext?: AgentAdditionalContext;
+  }>;
 }
 
 class FakeRun implements FakeAgentRun {
@@ -18,7 +23,11 @@ class FakeRun implements FakeAgentRun {
   readonly opts: AgentRunOptions;
   readonly events: AsyncIterable<AgentEvent>;
   readonly waitForExitResult: boolean;
-  readonly steered: Array<{ prompt: string; images: readonly string[] }> = [];
+  readonly steered: Array<{
+    prompt: string;
+    images: readonly string[];
+    additionalContext?: AgentAdditionalContext;
+  }> = [];
   #stopped = false;
   #waitForExitCalls = 0;
 
@@ -45,8 +54,16 @@ class FakeRun implements FakeAgentRun {
     this.#stopped = true;
   }
 
-  async steer(prompt: string, images: readonly string[] = []): Promise<void> {
-    this.steered.push({ prompt, images });
+  async steer(
+    prompt: string,
+    images: readonly string[] = [],
+    additionalContext?: AgentAdditionalContext,
+  ): Promise<void> {
+    this.steered.push({
+      prompt,
+      images,
+      ...(additionalContext ? { additionalContext } : {}),
+    });
   }
 
   async waitForExit(): Promise<boolean> {

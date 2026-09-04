@@ -1,6 +1,6 @@
 import type { AgentCapability } from '../agent/capability';
 import { resolveModelArg } from '../agent/models';
-import type { AgentEvent } from '../agent/types';
+import type { AgentAdditionalContext, AgentEvent } from '../agent/types';
 import type { ProfileConfig } from '../config/profile-schema';
 import type { AccessDecision } from '../policy/access';
 import {
@@ -25,6 +25,7 @@ export interface StartRunFlowInput {
   scopeId: string;
   scope: ScopeContext;
   prompt: string;
+  additionalContext?: AgentAdditionalContext;
   attachments: AgentAttachment[];
   access: AccessDecision;
   capability: AgentCapability;
@@ -106,6 +107,7 @@ export async function startRunFlow(input: StartRunFlowInput): Promise<StartRunFl
     scope: input.scope,
     attachments: input.attachments,
     prompt: input.prompt,
+    additionalContext: input.additionalContext,
     requestedCwd,
     cwdRealpath: workspace.cwdRealpath,
     access: input.access,

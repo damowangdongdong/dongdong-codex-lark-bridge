@@ -1,9 +1,74 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { buildAgentPrompt } from '../../../src/agent/prompt';
+import { buildAgentPrompt, buildCodexPrompt } from '../../../src/agent/prompt';
 
 describe('agent prompt builder', () => {
+  it('keeps a normal Codex message identical to the human input', () => {
+    expect(buildCodexPrompt({
+      context: {
+        chatId: 'oc_dm',
+        chatType: 'p2p',
+        senderId: 'ou_owner',
+        senderType: 'user',
+        botOpenId: 'ou_bot',
+        mentions: [{ openId: 'ou_bot', name: 'Bridge', isBot: true }],
+        messageIds: ['om_1'],
+        source: 'im',
+      },
+      userInput: 'hello',
+      attachments: [{
+        path: '/media/image.png',
+        kind: 'image',
+        decision: 'accepted',
+      }],
+    })).toEqual({ prompt: 'hello' });
+  });
+
+  it('keeps exceptional Lark context separate from the Codex user message', () => {
+    const result = buildCodexPrompt({
+      context: {
+        chatId: 'oc_group',
+        chatType: 'group',
+        senderId: 'ou_bot_sender',
+        senderName: 'Build Bot',
+        senderType: 'bot',
+        botOpenId: 'ou_bridge',
+        mentions: [
+          { openId: 'ou_bridge', name: 'Bridge', isBot: true },
+          { openId: 'ou_human', name: 'Owner', isBot: false },
+        ],
+        source: 'im',
+      },
+      instructions: ['The selected model changed.'],
+      userInput: 'please review this',
+      quotedMessages: [{
+        messageId: 'om_quote',
+        senderId: 'ou_owner',
+        rawContentType: 'text',
+        content: 'earlier request',
+      }],
+      attachments: [
+        {
+          path: '/media/file.txt',
+          kind: 'file',
+          hash: 'not-useful-to-the-model',
+          decision: 'accepted',
+        },
+      ],
+    });
+
+    expect(result.prompt).toBe('please review this');
+    expect(result.prompt).not.toContain('bridge_context');
+    expect(result.additionalContext?.['lark-channel']).toMatchObject({ kind: 'application' });
+    expect(result.additionalContext?.['lark-message-context']).toMatchObject({ kind: 'untrusted' });
+    expect(result.additionalContext?.['lark-channel']?.value).toContain('ou_bot_sender');
+    expect(result.additionalContext?.['lark-channel']?.value).not.toContain('ou_bridge\",\"name\":\"Bridge');
+    expect(result.additionalContext?.['lark-message-context']?.value).toContain('earlier request');
+    expect(result.additionalContext?.['lark-message-context']?.value).toContain('/media/file.txt');
+    expect(result.additionalContext?.['lark-message-context']?.value).not.toContain('not-useful');
+  });
+
   it('serializes untrusted message, quote, card, and comment text without closing bridge tags', () => {
     const prompt = buildAgentPrompt({
       context: {

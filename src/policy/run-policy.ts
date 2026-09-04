@@ -1,4 +1,5 @@
 import type { AgentCapability } from '../agent/capability';
+import type { AgentAdditionalContext } from '../agent/types';
 import {
   accessToClaudePermissionMode,
   accessToCodexSandbox,
@@ -47,6 +48,7 @@ export interface RunPolicyInput {
   scope: ScopeContext;
   attachments: AgentAttachment[];
   prompt: string;
+  additionalContext?: AgentAdditionalContext;
   requestedCwd: string;
   cwdRealpath: string;
   access: AccessDecision;
@@ -63,6 +65,7 @@ export interface RunPolicyInput {
 export interface RunPolicyAllow {
   ok: true;
   prompt: string;
+  additionalContext?: AgentAdditionalContext;
   requestedCwd: string;
   cwdRealpath: string;
   accessMode: AccessMode;
@@ -135,6 +138,7 @@ export function evaluateRunPolicy(input: RunPolicyInput): RunPolicyResult {
   return {
     ok: true,
     prompt: input.prompt,
+    ...(input.additionalContext ? { additionalContext: input.additionalContext } : {}),
     requestedCwd: input.requestedCwd,
     cwdRealpath: input.cwdRealpath,
     accessMode,

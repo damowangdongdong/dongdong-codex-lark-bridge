@@ -45,10 +45,15 @@ experimental_bearer_token = "secret-token"
       new CodexAdapter({ binary: fake.path, profileStateDir: fake.dir }),
       adapters,
     );
-    adapter.setBotIdentity({ openId: 'ou_bot_self', name: 'Bridge' });
     const run = adapter.run({
       runId: 'run-new',
       prompt: 'hello from lark',
+      additionalContext: {
+        'lark-message-context': {
+          kind: 'untrusted',
+          value: '{"quotedMessages":[{"content":"earlier message"}]}',
+        },
+      },
       cwd,
       profile: 'freerouter',
       sandbox: 'workspace-write',
@@ -103,6 +108,13 @@ experimental_bearer_token = "secret-token"
     const turnStart = record.messages.find((message) => message.method === 'turn/start');
     expect(turnStart?.params).toMatchObject({
       threadId: 'thread-new',
+      input: [{ type: 'text', text: 'hello from lark', text_elements: [] }],
+      additionalContext: {
+        'lark-message-context': {
+          kind: 'untrusted',
+          value: '{"quotedMessages":[{"content":"earlier message"}]}',
+        },
+      },
       cwd,
       approvalPolicy: 'never',
       sandboxPolicy: {
@@ -114,8 +126,7 @@ experimental_bearer_token = "secret-token"
       },
     });
     expect(JSON.stringify(turnStart?.params)).not.toContain('readOnlyAccess');
-    expect(JSON.stringify(turnStart?.params)).toContain('hello from lark');
-    expect(JSON.stringify(turnStart?.params)).toContain('ou_bot_self');
+    expect(JSON.stringify(turnStart?.params)).not.toContain('lark-channel-bridge 运行约定');
     expect(run.remoteSession?.()).toMatchObject({ threadId: 'thread-new', profile: 'freerouter' });
     expect(run.remoteSession?.().endpoint).toMatch(/^ws:\/\/127\.0\.0\.1:/);
   });
@@ -162,6 +173,7 @@ experimental_bearer_token = "secret-token"
       turnId: 'turn-1',
     });
     expect(record.messages.find((message) => message.method === 'turn/start')?.params).toMatchObject({
+      input: [{ type: 'text', text: 'continue', text_elements: [] }],
       sandboxPolicy: { type: 'readOnly', networkAccess: false },
     });
   });

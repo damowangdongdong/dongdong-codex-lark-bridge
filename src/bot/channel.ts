@@ -9,6 +9,8 @@ import { claudeCapability, codexCapability } from '../agent/capability';
 import { modelLabel, normalizeModelSelection, resolveModelArg } from '../agent/models';
 import {
   buildAgentPrompt,
+  buildCodexPrompt,
+  type BuildAgentPromptInput,
   type BridgePromptInteractiveCard,
   type BridgePromptMention,
   type BridgePromptQuotedMessage,
@@ -921,7 +923,16 @@ async function intakeMessage(deps: IntakeDeps): Promise<void> {
     const active = activeRuns.get(scope);
     if (active?.run.steer && emsg.resources.length === 0) {
       try {
-        await active.run.steer(buildPrompt([emsg], [], [], [], channel.botIdentity));
+        const input = buildPrompt(
+          [emsg],
+          [],
+          [],
+          [],
+          channel.botIdentity,
+          undefined,
+          'codex',
+        );
+        await active.run.steer(input.prompt, [], input.additionalContext);
         activeRuns.requestPresentationSplit(scope, {
           replyTo: emsg.messageId,
           ...(chatMode === 'topic' ? { replyInThread: true } : {}),
@@ -1075,16 +1086,19 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
       ]
     : undefined;
 
-  const prompt = buildPrompt(
+  const agentInput = buildPrompt(
     batch,
     attachments,
     quotes,
     topicContext,
     channel.botIdentity,
     extraInstructions,
+    agentKind,
   );
   log.info('prompt', 'built', {
-    promptChars: prompt.length,
+    promptChars: agentInput.prompt.length,
+    additionalContextChars: Object.values(agentInput.additionalContext ?? {})
+      .reduce((total, entry) => total + entry.value.length, 0),
     quotes: quotes.length,
     topicContext: topicContext.length,
     ...(modelSwitched ? { modelSwitchedTo: modelSelection } : {}),
@@ -1123,7 +1137,8 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
   const flow = await startRunFlow({
     scopeId: scope,
     scope: scopeContext,
-    prompt,
+    prompt: agentInput.prompt,
+    additionalContext: agentInput.additionalContext,
     attachments: attachments.map(toPolicyAttachment),
     access: accessDecision,
     capability,
@@ -2192,9 +2207,10 @@ function buildPrompt(
   topicContext: QuotedContext[] = [],
   botIdentity?: { openId: string; name?: string },
   extraInstructions?: string[],
-): string {
+  agentKind: 'claude' | 'codex' = 'claude',
+): ReturnType<typeof buildCodexPrompt> {
   const first = batch[0];
-  if (!first) return '';
+  if (!first) return { prompt: '' };
 
   const fileKeys = batch.flatMap((m) => m.resources.map((r) => r.fileKey));
   // When the debounce window merged messages (possibly from several senders —
@@ -2218,7 +2234,7 @@ function buildPrompt(
   const senderType = senderTypeOf(first);
   const mentions = mergeMentions(batch);
 
-  return buildAgentPrompt({
+  const input = {
     context: {
       chatId: first.chatId,
       chatType: first.chatType,
@@ -2231,8 +2247,9 @@ function buildPrompt(
       messageIds: batch.map((m) => m.messageId),
       source: 'im',
     },
-    instructions:
-      extraInstructions && extraInstructions.length > 0
+    instructions: agentKind === 'codex'
+      ? extraInstructions
+      : extraInstructions && extraInstructions.length > 0
         ? [...BRIDGE_AGENT_INSTRUCTIONS, ...extraInstructions]
         : BRIDGE_AGENT_INSTRUCTIONS,
     userInput: userPart,
@@ -2240,7 +2257,11 @@ function buildPrompt(
     quotedMessages: quotes.map(toPromptQuote),
     interactiveCards: batch.map(toPromptInteractiveCard).filter(isDefined),
     attachments: attachments.map(toPromptAttachment),
-  });
+  } satisfies BuildAgentPromptInput;
+
+  return agentKind === 'codex'
+    ? buildCodexPrompt(input)
+    : { prompt: buildAgentPrompt(input) };
 }
 
 /**

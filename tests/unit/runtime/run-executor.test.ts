@@ -24,6 +24,9 @@ describe('RunExecutor policy runtime options', () => {
       policy: policy({
         sandbox: 'workspace-write',
         permissionMode: 'acceptEdits',
+        additionalContext: {
+          'lark-message-context': { kind: 'untrusted', value: '{"quote":"context"}' },
+        },
       }),
     });
 
@@ -31,6 +34,9 @@ describe('RunExecutor policy runtime options', () => {
       runId: 'run-policy',
       sandbox: 'workspace-write',
       permissionMode: 'acceptEdits',
+      additionalContext: {
+        'lark-message-context': { kind: 'untrusted', value: '{"quote":"context"}' },
+      },
     });
 
     await collect(execution.subscribe());
