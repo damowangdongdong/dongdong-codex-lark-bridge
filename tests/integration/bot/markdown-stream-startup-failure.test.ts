@@ -458,6 +458,49 @@ describe('markdown stream startup failures', () => {
     expect(h.channel.sent[0]?.options).toMatchObject({ replyTo: 'om_card_final' });
   });
 
+  it('shows thinking in a collapsed card before any tool or answer text', async () => {
+    const progressCards: unknown[] = [];
+    const h = await createHarness({
+      messageReply: 'card',
+      events: [
+        { type: 'thinking', delta: 'VISIBLE_REASONING' },
+        { type: 'final_text', content: 'FINAL_AFTER_REASONING' },
+        { type: 'done', terminationReason: 'normal' },
+      ],
+      stream: async (_chatId, input) => {
+        const card = (input as {
+          card?: {
+            initial?: unknown;
+            producer?: (ctrl: { update(next: unknown): Promise<void> }) => Promise<void>;
+          };
+        }).card;
+        if (card?.initial) progressCards.push(card.initial);
+        await card?.producer?.({
+          update: async (next: unknown) => {
+            progressCards.push(next);
+          },
+        });
+      },
+    });
+    await startTestBridge(h);
+
+    await h.channel.handlers.message?.(message('om_card_reasoning', 'run'));
+    await waitFor(() => h.channel.sent.length === 1);
+
+    const reasoningCard = progressCards.find((card) =>
+      JSON.stringify(card).includes('VISIBLE_REASONING'),
+    );
+    expect(reasoningCard).toBeDefined();
+    expect(JSON.stringify(reasoningCard)).toContain('思考中，点击查看');
+    expect(reasoningCard).toMatchObject({
+      body: {
+        elements: expect.arrayContaining([
+          expect.objectContaining({ tag: 'collapsible_panel', expanded: false }),
+        ]),
+      },
+    });
+  });
+
   it('keeps consuming the agent stream when a live card update fails', async () => {
     let updateCount = 0;
     const h = await createHarness({

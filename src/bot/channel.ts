@@ -1377,7 +1377,7 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
             });
           }
           currentSegment.state = advanceSegmentState(currentSegment.state, state, event);
-          if (shouldOpenProgressStream(filterForPrefs(currentSegment.state))) {
+          if (shouldOpenProgressStream(filterForPrefs(currentSegment.state), true)) {
             currentSegment.progress.ensureOpen();
           }
           await currentSegment.update();
@@ -1413,7 +1413,7 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
         log.fail('stream', err, { mode: replyMode, step: 'progress-stream' });
       }
       await Promise.all(segments.map((segment) =>
-        recallIfEmptyStreamedReply(channel, segment.progress, filterForPrefs(segment.state), scope)
+        recallIfEmptyStreamedReply(channel, segment.progress, filterForPrefs(segment.state), scope, true)
       ));
       if (controls.profileConfig.agentKind === 'codex') {
         const visibleProgress = segments.find((segment) =>
@@ -1504,7 +1504,7 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
             });
           }
           currentSegment.state = advanceSegmentState(currentSegment.state, state, event);
-          if (shouldOpenProgressStream(filterForPrefs(currentSegment.state))) {
+          if (shouldOpenProgressStream(filterForPrefs(currentSegment.state), false)) {
             currentSegment.progress.ensureOpen();
           }
           await currentSegment.update();
@@ -1538,7 +1538,7 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
         log.fail('stream', err, { mode: replyMode, step: 'progress-stream' });
       }
       await Promise.all(segments.map((segment) =>
-        recallIfEmptyStreamedReply(channel, segment.progress, filterForPrefs(segment.state), scope)
+        recallIfEmptyStreamedReply(channel, segment.progress, filterForPrefs(segment.state), scope, false)
       ));
       if (controls.profileConfig.agentKind === 'codex') {
         const visibleProgress = segments.find((segment) =>
@@ -1654,12 +1654,17 @@ function createLazyProgressStream(
  * (`sendFinalReply`, or the stream fallback) instead of a card that would be
  * created only to be finished a moment later.
  *
- * `state` must already be `filterForPrefs`-projected, and emptiness is measured
- * with `renderText` in both reply modes so it matches the rule
- * `recallIfEmptyStreamedReply` applies: a stream we open is one that survives.
+ * `state` must already be `filterForPrefs`-projected. Card mode also counts
+ * reasoning because it has a persistent collapsed panel for it; markdown mode
+ * intentionally omits reasoning because markdown cannot fold it.
  */
-function shouldOpenProgressStream(state: RunState): boolean {
+function shouldOpenProgressStream(state: RunState, showReasoning: boolean): boolean {
   if (state.terminal !== 'running') return false;
+  return hasVisibleProgressContent(state, showReasoning);
+}
+
+function hasVisibleProgressContent(state: RunState, showReasoning: boolean): boolean {
+  if (showReasoning && state.reasoning.content.trim()) return true;
   return renderText({ ...state, footer: null }).trim() !== '';
 }
 
@@ -1702,6 +1707,7 @@ async function recallIfEmptyStreamedReply(
   progress: LazyProgressStream,
   finalState: RunState,
   scope: string,
+  showReasoning: boolean,
 ): Promise<void> {
   if (!progress.opened()) return;
   // An abandoned stream renders nothing, so whatever message it eventually
@@ -1714,7 +1720,7 @@ async function recallIfEmptyStreamedReply(
     );
     return;
   }
-  if (renderText(finalState).trim() !== '') return;
+  if (hasVisibleProgressContent(finalState, showReasoning)) return;
   const result = await progress.settled.catch(() => undefined);
   await recallStreamedMessage(channel, result, scope);
 }
