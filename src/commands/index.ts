@@ -4,6 +4,10 @@ import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute } from 'node:path';
 import type { LarkChannel, NormalizedMessage } from '@larksuite/channel';
 import { claudeCapability, codexCapability } from '../agent/capability';
+import {
+  CODEX_GOAL_CONTINUATION_CLIENT_ID,
+  parseCodexGoal,
+} from '../agent/goal';
 import { discoverCodexProfiles, loadCodexProfileConfig } from '../config/codex-profiles';
 import { DEFAULT_MODEL, normalizeModelSelection, resolveModelArg, supportedModels } from '../agent/models';
 import type { AgentAdapter } from '../agent/types';
@@ -73,6 +77,7 @@ import { buildEncryptedAccountConfig } from '../config/store';
 import * as configOps from '../config/config-ops';
 import { log, reportMetric } from '../core/logger';
 import { renderCard } from '../card/run-renderer';
+import { formatGoalSummary } from '../card/run-status';
 import { renderCodexHistoryCards } from '../card/codex-trace';
 import { codexThreadIdMarkdown, copyableShellCommandMarkdown } from '../card/copyable-code';
 import {
@@ -880,6 +885,10 @@ async function handleCodexFork(ctx: CommandContext): Promise<void> {
 
 async function handleCodexGoal(args: string, ctx: CommandContext): Promise<void> {
   const value = args.trim();
+  if (value === 'edit') {
+    await reply(ctx, '用法：`/goal edit <新目标>`');
+    return;
+  }
   const setsObjective = Boolean(
     value
     && value !== 'clear'
@@ -897,7 +906,11 @@ async function handleCodexGoal(args: string, ctx: CommandContext): Promise<void>
   if (!remote.threadId) return reply(ctx, '当前 scope 没有 Codex thread。');
   if (!value) {
     const result = await codexRpc(ctx, 'thread/goal/get', { threadId: remote.threadId });
-    await reply(ctx, formatRpcResult('当前 goal', result));
+    const goal = parseCodexGoal(recordValue(result)?.goal);
+    await reply(
+      ctx,
+      goal ? `**当前 goal**\n\n${formatGoalSummary(goal)}` : '当前 thread 没有 goal。',
+    );
     return;
   }
   if (value === 'clear') {
@@ -914,13 +927,27 @@ async function handleCodexGoal(args: string, ctx: CommandContext): Promise<void>
     return;
   }
   const objective = value.startsWith('edit ') ? value.slice(5).trim() : value;
-  await codexRpc(ctx, 'thread/goal/set', { threadId: remote.threadId, objective, status: 'active' });
+  const result = await codexRpc(ctx, 'thread/goal/set', {
+    threadId: remote.threadId,
+    objective,
+    status: 'active',
+  });
+  const goal = parseCodexGoal(recordValue(result)?.goal);
   if (createdNewThread) {
-    await codexRpc(ctx, 'turn/start', codexTurnStartParams(ctx, remote.threadId, '请开始执行当前 goal。'));
-    await reply(ctx, '✓ 已创建新的 Codex 对话并开始执行当前 goal。');
+    await codexRpc(ctx, 'turn/start', {
+      ...codexTurnStartParams(ctx, remote.threadId, '请开始执行当前 goal。'),
+      clientUserMessageId: CODEX_GOAL_CONTINUATION_CLIENT_ID,
+      turnTrigger: 'goal',
+    });
+    await reply(
+      ctx,
+      goal
+        ? `✓ 已创建新的 Codex 对话并启动 goal。\n\n${formatGoalSummary(goal)}`
+        : '✓ 已创建新的 Codex 对话并启动 goal。',
+    );
     return;
   }
-  await reply(ctx, '✓ 当前 goal 已更新。');
+  await reply(ctx, goal ? `✓ 当前 goal 已更新。\n\n${formatGoalSummary(goal)}` : '✓ 当前 goal 已更新。');
 }
 
 async function handleCodexSkill(args: string, ctx: CommandContext): Promise<void> {

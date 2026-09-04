@@ -1139,6 +1139,18 @@ describe('agent-aware resume commands', () => {
     h.agent.setAppServerResponse('thread/start', {
       thread: { id: 'thread-goal' },
     });
+    h.agent.setAppServerResponse('thread/goal/set', {
+      goal: {
+        threadId: 'thread-goal',
+        objective: 'reproduce the harness',
+        status: 'active',
+        tokenBudget: null,
+        tokensUsed: 0,
+        timeUsedSeconds: 0,
+        createdAt: 10,
+        updatedAt: 10,
+      },
+    });
 
     await expect(h.run('/goal reproduce the harness')).resolves.toBe(true);
 
@@ -1159,12 +1171,38 @@ describe('agent-aware resume commands', () => {
       method: 'turn/start',
       params: {
         threadId: 'thread-goal',
+        clientUserMessageId: 'lark-channel-bridge:goal-continuation',
+        turnTrigger: 'goal',
         input: [{ text: '请开始执行当前 goal。' }],
       },
     });
     expect(h.catalog.activeFor(h.identity)).toMatchObject({ threadId: 'thread-goal' });
     expect(h.workspaces.selectionFor('chat-1')).toMatchObject({ launchMode: 'new' });
-    expect(lastMarkdown(h.channel)).toContain('开始执行当前 goal');
+    expect(lastMarkdown(h.channel)).toContain('Pursuing goal (0s)');
+    expect(lastMarkdown(h.channel)).not.toContain('请开始执行当前 goal');
+  });
+
+  it('renders the current Codex goal as a live-style status summary', async () => {
+    const h = await createHarness('codex');
+    h.catalog.upsertActive({ ...h.identity, threadId: 'thread-current', now: 1000 });
+    h.agent.setAppServerResponse('thread/goal/get', {
+      goal: {
+        threadId: 'thread-current',
+        objective: 'Finish the release',
+        status: 'active',
+        tokenBudget: 20_000,
+        tokensUsed: 1_250,
+        timeUsedSeconds: 65,
+        createdAt: 10,
+        updatedAt: 20,
+      },
+    });
+
+    await expect(h.run('/goal')).resolves.toBe(true);
+
+    expect(lastMarkdown(h.channel)).toContain('Pursuing goal (1m 5s)');
+    expect(lastMarkdown(h.channel)).toContain('1,250 / 20,000 tokens');
+    expect(lastMarkdown(h.channel)).toContain('Finish the release');
   });
 
   it('maps the remaining app-server-backed Codex commands and aliases', async () => {

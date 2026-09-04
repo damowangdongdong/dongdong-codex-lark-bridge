@@ -85,6 +85,7 @@ experimental_bearer_token = "secret-token"
       'initialize',
       'initialized',
       'thread/start',
+      'thread/goal/get',
       'turn/start',
     ]);
     const threadStart = record.messages.find((message) => message.method === 'thread/start');
@@ -217,12 +218,30 @@ experimental_bearer_token = "secret-token"
       });
     });
 
+    await adapter.appServerRequest(undefined, 'thread/goal/set', {
+      threadId: 'thread-new',
+      objective: 'Ship the bridge',
+      status: 'active',
+    });
     await adapter.appServerRequest(undefined, 'test/externalTurn', {});
     const external = await externalPromise;
 
     expect(external.binding).toMatchObject({ scopeId: 'chat-1', threadId: 'thread-new' });
     expect(await collect(external.run.events)).toEqual([
       { type: 'system', threadId: 'thread-new', cwd },
+      {
+        type: 'goal_update',
+        goal: {
+          objective: 'Ship the bridge',
+          status: 'active',
+          tokenBudget: null,
+          tokensUsed: 0,
+          timeUsedSeconds: 0,
+          createdAt: 10,
+          updatedAt: 10,
+          observedAtMs: expect.any(Number),
+        },
+      },
       { type: 'user_text', content: 'typed in terminal' },
       { type: 'final_text', content: 'terminal answer' },
       { type: 'done', threadId: 'thread-new', terminationReason: 'normal' },
@@ -310,6 +329,17 @@ wss.on('connection', (socket) => {
     if (message.method === 'initialized') return;
     if (message.method === 'thread/start') return respond({ thread: { id: 'thread-new' }, cwd: message.params.cwd, model: 'fake-model' });
     if (message.method === 'thread/resume') return respond({ thread: { id: message.params.threadId }, cwd: message.params.cwd, model: 'fake-model' });
+    if (message.method === 'thread/goal/get') return respond({ goal: null });
+    if (message.method === 'thread/goal/set') return respond({ goal: {
+      threadId: message.params.threadId,
+      objective: message.params.objective,
+      status: message.params.status,
+      tokenBudget: null,
+      tokensUsed: 0,
+      timeUsedSeconds: 0,
+      createdAt: 10,
+      updatedAt: 10,
+    } });
     if (message.method === 'turn/start') {
       respond({ turn: { id: 'turn-1', status: 'inProgress' } });
       if (${JSON.stringify(Boolean(input.keepTurnOpen))}) return;

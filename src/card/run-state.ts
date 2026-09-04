@@ -1,4 +1,9 @@
-import type { AgentEvent, AgentNoticeLevel } from '../agent/types';
+import type {
+  AgentEvent,
+  AgentGoal,
+  AgentNoticeLevel,
+  AgentPlanStep,
+} from '../agent/types';
 
 export type ToolStatus = 'running' | 'done' | 'error';
 
@@ -31,6 +36,8 @@ export interface RunState {
   blocks: Block[];
   finalText?: string;
   reasoning: { content: string; active: boolean };
+  goal?: AgentGoal;
+  plan?: { explanation?: string; steps: AgentPlanStep[] };
   footer: FooterStatus;
   terminal: Terminal;
   errorMsg?: string;
@@ -115,6 +122,23 @@ export function reduce(state: RunState, evt: AgentEvent): RunState {
         footer: 'thinking',
       };
     }
+
+    case 'goal_update':
+      return { ...state, goal: evt.goal };
+
+    case 'goal_clear':
+      return { ...state, goal: undefined };
+
+    case 'plan_update':
+      return {
+        ...state,
+        plan: evt.steps.length > 0 || evt.explanation
+          ? {
+              ...(evt.explanation ? { explanation: evt.explanation } : {}),
+              steps: evt.steps,
+            }
+          : undefined,
+      };
 
     case 'tool_use': {
       const tool: ToolEntry = {

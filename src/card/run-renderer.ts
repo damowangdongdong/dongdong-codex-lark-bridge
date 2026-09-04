@@ -1,6 +1,7 @@
 import { deepMaskEmails } from './mask-email';
 import { codexThreadIdMarkdown } from './copyable-code';
-import type { Block, FooterStatus, NoticeEntry, RunState, ToolEntry } from './run-state';
+import type { Block, NoticeEntry, RunState, ToolEntry } from './run-state';
+import { renderRunStateMarkdown } from './run-status';
 import { toolHeaderText } from './tool-render';
 
 const REASONING_MAX = 1500;
@@ -29,6 +30,7 @@ type Group = ToolGroup | TextGroup | UserGroup | NoticeGroup | RetryGroup;
 
 export interface RunCardRenderOptions {
   codexContext?: { profile?: string; sandbox: string };
+  nowMs?: number;
 }
 
 export function renderCard(state: RunState, options: RunCardRenderOptions = {}): object {
@@ -63,21 +65,13 @@ export function renderCard(state: RunState, options: RunCardRenderOptions = {}):
     }
   }
 
-  if (state.terminal === 'continued') {
-    elements.push(noteMd('_↘ 已在下方接续_'));
-  } else if (state.terminal === 'interrupted') {
-    elements.push(noteMd('_⏹ 已被中断_'));
-  } else if (state.terminal === 'idle_timeout') {
-    const mins = state.idleTimeoutMinutes ?? 0;
-    elements.push(noteMd(`_⏱ ${mins} 分钟无响应,已自动终止_`));
-  } else if (state.terminal === 'error' && state.errorMsg) {
-    elements.push(noteMd(`⚠️ agent 失败：${state.errorMsg}`));
-  } else if (state.terminal === 'done' && elements.length === 0) {
+  const runState = renderRunStateMarkdown(state, options.nowMs);
+  if (state.terminal === 'done' && elements.length === 0 && !runState) {
     elements.push(noteMd('_（未返回内容）_'));
   }
-
-  if (state.terminal === 'running') {
-    if (state.footer) elements.push(footerStatus(state.footer));
+  if (runState) {
+    if ((state.goal || state.plan) && elements.length > 0) elements.push({ tag: 'hr' });
+    elements.push(noteMd(runState));
   }
 
   // Mask raw emails across every text field so the Feishu tenant audit doesn't
@@ -274,16 +268,6 @@ function markdown(content: string): object {
 
 function noteMd(content: string): object {
   return { tag: 'markdown', content, text_size: 'notation' };
-}
-
-function footerStatus(status: Exclude<FooterStatus, null>): object {
-  const text =
-    status === 'thinking'
-      ? '🧠 正在思考'
-      : status === 'tool_running'
-        ? '🧰 正在调用工具'
-        : '✍️ 正在输出';
-  return noteMd(text);
 }
 
 function summaryText(state: RunState): string {

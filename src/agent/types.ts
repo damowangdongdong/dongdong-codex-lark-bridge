@@ -5,12 +5,42 @@ export type { ClaudePermissionMode } from '../config/permissions';
 
 export type AgentNoticeLevel = 'warning' | 'error' | 'retry' | 'recovered';
 
+export type AgentGoalStatus =
+  | 'active'
+  | 'paused'
+  | 'blocked'
+  | 'usageLimited'
+  | 'budgetLimited'
+  | 'complete';
+
+export interface AgentGoal {
+  objective: string;
+  status: AgentGoalStatus;
+  tokenBudget: number | null;
+  tokensUsed: number;
+  timeUsedSeconds: number;
+  createdAt: number;
+  updatedAt: number;
+  /** Local receipt time used to keep the visible active timer moving. */
+  observedAtMs: number;
+}
+
+export type AgentPlanStepStatus = 'pending' | 'inProgress' | 'completed';
+
+export interface AgentPlanStep {
+  step: string;
+  status: AgentPlanStepStatus;
+}
+
 export type AgentEvent =
   | { type: 'system'; sessionId?: string; threadId?: string; cwd?: string; model?: string }
   | { type: 'user_text'; content: string }
   | { type: 'text'; delta: string }
   | { type: 'final_text'; content: string }
   | { type: 'thinking'; delta: string }
+  | { type: 'goal_update'; goal: AgentGoal }
+  | { type: 'goal_clear' }
+  | { type: 'plan_update'; explanation?: string; steps: AgentPlanStep[] }
   | { type: 'tool_use'; id: string; name: string; input: unknown }
   | { type: 'tool_progress'; id: string; delta: string }
   | { type: 'tool_result'; id: string; output: string; isError: boolean }

@@ -81,6 +81,7 @@ import {
 const DEBOUNCE_MS = 600;
 const STREAM_TERMINAL_GRACE_MS = 3000;
 const REACTION_CLEANUP_GRACE_MS = 1000;
+const GOAL_TIMER_REFRESH_MS = 1000;
 
 const BRIDGE_AGENT_INSTRUCTIONS = [
   '你在 bridge 进程中运行，普通 lark-cli 会继承 LARK_CHANNEL=1 并进入 bridge-bound 模式。',
@@ -1310,6 +1311,7 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
         let cardCtrl:
           | { update(next: object | ((current: object) => object)): Promise<void> }
           | undefined;
+        let updateTail = Promise.resolve();
         const segment = {} as CardProgressSegment;
         const safeCardUpdate = createSafeProgressUpdate(
           scope,
@@ -1329,7 +1331,14 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
                   if (progress.abandoned()) return;
                   cardCtrl = ctrl;
                   await segment.update();
-                  await renderDone;
+                  const goalTimer = setInterval(() => {
+                    if (shouldRefreshGoalClock(segment.state)) void segment.update();
+                  }, GOAL_TIMER_REFRESH_MS);
+                  try {
+                    await renderDone;
+                  } finally {
+                    clearInterval(goalTimer);
+                  }
                 },
               },
             },
@@ -1341,7 +1350,9 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
           progress,
           producerStarted: false,
           update: async (): Promise<void> => {
-            await safeCardUpdate(renderCard(filterForPrefs(segment.state), cardRenderOptions));
+            const card = renderCard(filterForPrefs(segment.state), cardRenderOptions);
+            updateTail = updateTail.then(() => safeCardUpdate(card));
+            await updateTail;
           },
         });
         // Split streams are best-effort progress UI. Attach a rejection handler
@@ -1443,6 +1454,7 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
         segmentSendOpts: { replyTo: string; replyInThread?: boolean },
       ): MarkdownProgressSegment => {
         let markdownCtrl: { setContent(markdown: string): Promise<void> } | undefined;
+        let updateTail = Promise.resolve();
         const segment = {} as MarkdownProgressSegment;
         const safeMarkdownUpdate = createSafeProgressUpdate(
           scope,
@@ -1460,7 +1472,14 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
                 if (progress.abandoned()) return;
                 markdownCtrl = ctrl;
                 await segment.update();
-                await renderDone;
+                const goalTimer = setInterval(() => {
+                  if (shouldRefreshGoalClock(segment.state)) void segment.update();
+                }, GOAL_TIMER_REFRESH_MS);
+                try {
+                  await renderDone;
+                } finally {
+                  clearInterval(goalTimer);
+                }
               },
             },
             segmentSendOpts,
@@ -1471,7 +1490,9 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
           progress,
           producerStarted: false,
           update: async (): Promise<void> => {
-            await safeMarkdownUpdate(renderText(filterForPrefs(segment.state)));
+            const markdown = renderText(filterForPrefs(segment.state));
+            updateTail = updateTail.then(() => safeMarkdownUpdate(markdown));
+            await updateTail;
           },
         });
         void progress.settled.catch((err) => {
@@ -1668,6 +1689,10 @@ function hasVisibleProgressContent(state: RunState, showReasoning: boolean): boo
   return renderText({ ...state, footer: null }).trim() !== '';
 }
 
+function shouldRefreshGoalClock(state: RunState): boolean {
+  return state.terminal === 'running' && state.goal?.status === 'active';
+}
+
 /**
  * What Codex's dedicated final reply may carry, given what the progress stream
  * already put on screen.
@@ -1684,10 +1709,13 @@ function hasVisibleProgressContent(state: RunState, showReasoning: boolean): boo
  */
 function finalReplyState(progress: LazyProgressStream, state: RunState): RunState {
   if (!progress.opened() || progress.abandoned()) return finalAnswerOnlyState(state);
+  const showRunState = Boolean(state.finalText);
   return {
     ...state,
     blocks: state.finalText ? [{ kind: 'text', content: state.finalText, streaming: false }] : [],
     reasoning: { content: '', active: false },
+    goal: showRunState ? state.goal : undefined,
+    plan: showRunState ? state.plan : undefined,
     footer: null,
     terminal: 'done',
     errorMsg: undefined,
@@ -1894,6 +1922,8 @@ function advanceSegmentState(
       : {}),
     ...(aggregate.session ? { session: aggregate.session } : {}),
     ...(aggregate.usage ? { usage: aggregate.usage } : {}),
+    goal: aggregate.goal,
+    plan: aggregate.plan,
   };
 }
 

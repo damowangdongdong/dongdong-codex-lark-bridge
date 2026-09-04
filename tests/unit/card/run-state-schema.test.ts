@@ -37,4 +37,38 @@ describe('run state terminal event schema', () => {
       }).terminal,
     ).toBe('idle_timeout');
   });
+
+  it('replaces plan snapshots and clears the active goal', () => {
+    const withGoal = reduce(initialState, {
+      type: 'goal_update',
+      goal: {
+        objective: 'Ship the bridge',
+        status: 'active',
+        tokenBudget: 10_000,
+        tokensUsed: 250,
+        timeUsedSeconds: 30,
+        createdAt: 1,
+        updatedAt: 2,
+        observedAtMs: 3,
+      },
+    });
+    const firstPlan = reduce(withGoal, {
+      type: 'plan_update',
+      steps: [
+        { step: 'Inspect', status: 'completed' },
+        { step: 'Patch', status: 'inProgress' },
+      ],
+    });
+    const latestPlan = reduce(firstPlan, {
+      type: 'plan_update',
+      explanation: 'Latest snapshot',
+      steps: [{ step: 'Test', status: 'inProgress' }],
+    });
+
+    expect(latestPlan.plan).toEqual({
+      explanation: 'Latest snapshot',
+      steps: [{ step: 'Test', status: 'inProgress' }],
+    });
+    expect(reduce(latestPlan, { type: 'goal_clear' }).goal).toBeUndefined();
+  });
 });

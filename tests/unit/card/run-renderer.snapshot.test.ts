@@ -17,6 +17,69 @@ describe('run card renderer snapshots', () => {
     expectCard(initialState).toMatchSnapshot();
   });
 
+  it('keeps the live goal clock and plan at the bottom of the card', () => {
+    const state = stateFrom([
+      { type: 'text', delta: 'Working on it.' },
+      {
+        type: 'goal_update',
+        goal: {
+          objective: 'Ship the bridge',
+          status: 'active',
+          tokenBudget: 20_000,
+          tokensUsed: 1_250,
+          timeUsedSeconds: 65,
+          createdAt: 10,
+          updatedAt: 20,
+          observedAtMs: 1_000,
+        },
+      },
+      {
+        type: 'plan_update',
+        explanation: 'Execution order',
+        steps: [
+          { step: 'Inspect', status: 'completed' },
+          { step: 'Patch', status: 'inProgress' },
+          { step: 'Deploy', status: 'pending' },
+        ],
+      },
+    ]);
+    const card = renderCard(state, { nowMs: 6_000 }) as {
+      body: { elements: Array<Record<string, unknown>> };
+    };
+    const elements = card.body.elements;
+    const bottom = JSON.stringify(elements.at(-1));
+
+    expect(bottom).toContain('Pursuing goal (1m 10s)');
+    expect(bottom).toContain('1,250 / 20,000 tokens');
+    expect(bottom).toContain('☑ Inspect');
+    expect(bottom).toContain('▣ **Patch**');
+    expect(bottom).toContain('☐ Deploy');
+    expect(bottom).toContain('正在输出');
+    expect(JSON.stringify(elements.slice(0, -1))).not.toContain('Pursuing goal');
+    expect(renderText(state, 6_000)).toContain('Pursuing goal (1m 10s)');
+  });
+
+  it('does not put a divider above a goal-only run state', () => {
+    const state = stateFrom([{
+      type: 'goal_update',
+      goal: {
+        objective: 'Only goal',
+        status: 'active',
+        tokenBudget: null,
+        tokensUsed: 0,
+        timeUsedSeconds: 0,
+        createdAt: 1,
+        updatedAt: 1,
+        observedAtMs: 1_000,
+      },
+    }]);
+    const card = renderCard(state, { nowMs: 1_000 }) as {
+      body: { elements: Array<Record<string, unknown>> };
+    };
+
+    expect(card.body.elements[0]?.tag).toBe('markdown');
+  });
+
   it('renders active and completed thinking', () => {
     const active = stateFrom([{ type: 'thinking', delta: 'checking options' }]);
     expectCard(active).toMatchSnapshot();

@@ -1,4 +1,5 @@
-import type { AgentEvent } from '../types';
+import { CODEX_GOAL_CONTINUATION_CLIENT_ID, parseCodexGoal } from '../goal';
+import type { AgentEvent, AgentPlanStep } from '../types';
 import { extractBridgeUserInput } from '../prompt';
 import type { RpcNotification } from './app-server-client';
 
@@ -77,6 +78,12 @@ export class CodexAppServerEventTranslator {
       case 'thread/tokenUsage/updated':
         this.captureUsage(params);
         return [];
+      case 'thread/goal/updated': {
+        const goal = parseCodexGoal(params.goal);
+        return goal ? [{ type: 'goal_update', goal }] : [];
+      }
+      case 'thread/goal/cleared':
+        return [{ type: 'goal_clear' }];
       case 'turn/plan/updated':
         return this.withRecovery(turnPlanUpdate(params));
       case 'turn/diff/updated':
@@ -157,6 +164,9 @@ export class CodexAppServerEventTranslator {
       event.type === 'thinking'
       || event.type === 'text'
       || event.type === 'final_text'
+      || event.type === 'goal_update'
+      || event.type === 'goal_clear'
+      || event.type === 'plan_update'
       || event.type === 'tool_use'
       || event.type === 'tool_progress'
       || event.type === 'tool_result'
@@ -182,6 +192,7 @@ export class CodexAppServerEventTranslator {
       emittedText: type === 'userMessage' ? userMessageText(item) : initialText,
     });
     if (type === 'userMessage') {
+      if (stringValue(item.clientId) === CODEX_GOAL_CONTINUATION_CLIENT_ID) return [];
       const content = userMessageText(item);
       return content ? [{ type: 'user_text', content }] : [];
     }
@@ -359,19 +370,22 @@ export class CodexAppServerEventTranslator {
 }
 
 function turnPlanUpdate(params: Record<string, unknown>): AgentEvent[] {
-  const steps = Array.isArray(params.plan) ? params.plan : [];
-  const rendered = steps
+  const steps: AgentPlanStep[] = (Array.isArray(params.plan) ? params.plan : [])
     .map(recordValue)
     .filter((step): step is Record<string, unknown> => Boolean(step))
     .map((step) => {
       const status = stringValue(step.status);
-      const marker = status === 'completed' ? '✓' : status === 'inProgress' ? '→' : '·';
-      return `${marker} ${stringValue(step.step) ?? ''}`.trimEnd();
+      const text = stringValue(step.step);
+      if (!text || !isPlanStepStatus(status)) return undefined;
+      return { step: text, status };
     })
-    .filter(Boolean);
+    .filter((step): step is AgentPlanStep => Boolean(step));
   const explanation = stringValue(params.explanation);
-  const content = [explanation, ...rendered].filter(Boolean).join('\n');
-  return content ? [{ type: 'thinking', delta: `\n\nPlan update:\n${content}` }] : [];
+  return [{ type: 'plan_update', ...(explanation ? { explanation } : {}), steps }];
+}
+
+function isPlanStepStatus(value: string | undefined): value is AgentPlanStep['status'] {
+  return value === 'pending' || value === 'inProgress' || value === 'completed';
 }
 
 function codexErrorNotice(

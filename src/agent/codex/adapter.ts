@@ -11,10 +11,12 @@ import type {
   AgentBotIdentity,
   AgentEvent,
   AgentExternalRun,
+  AgentGoal,
   AgentRemoteThreadBinding,
   AgentRun,
   AgentRunOptions,
 } from '../types';
+import { parseCodexGoal } from '../goal';
 import { CodexAppServerClient, type RpcNotification } from './app-server-client';
 import { CodexAppServerEventTranslator } from './app-server-events';
 import {
@@ -44,6 +46,7 @@ export class CodexAdapter implements AgentAdapter {
   private readonly clients = new Map<string, CodexAppServerClient>();
   private readonly remoteBindings = new Map<string, AgentRemoteThreadBinding>();
   private readonly bridgeActiveThreads = new Set<string>();
+  private readonly threadGoals = new Map<string, AgentGoal>();
   private readonly externalRuns = new Map<string, CodexExternalRun>();
   private readonly externalRunListeners = new Set<(run: AgentExternalRun) => void>();
   private botIdentity: AgentBotIdentity | undefined;
@@ -109,6 +112,10 @@ export class CodexAdapter implements AgentAdapter {
           }
         : {}),
       botIdentity: this.botIdentity,
+      initialGoal: options.threadId
+        ? this.threadGoals.get(remoteThreadKey(profile, options.threadId))
+        : undefined,
+      rememberGoal: (threadId, goal) => this.rememberGoal(profile, threadId, goal),
       setBridgeThreadActive: (selectedProfile, threadId, active) => {
         this.setBridgeThreadActive(selectedProfile, threadId, active);
       },
@@ -118,6 +125,7 @@ export class CodexAdapter implements AgentAdapter {
   async close(): Promise<void> {
     const clients = [...this.clients.values()];
     this.clients.clear();
+    this.threadGoals.clear();
     await Promise.allSettled(clients.map((client) => client.close()));
   }
 
@@ -126,7 +134,17 @@ export class CodexAdapter implements AgentAdapter {
     method: string,
     params?: unknown,
   ): Promise<unknown> {
-    return this.clientFor(profile).request(method, params);
+    const selectedProfile = profile ?? this.options.profile;
+    const result = await this.clientFor(selectedProfile).request(method, params);
+    const threadId = stringValue(recordValue(params)?.threadId);
+    if (threadId && (method === 'thread/goal/set' || method === 'thread/goal/get')) {
+      const goal = parseCodexGoal(recordValue(result)?.goal);
+      if (goal) this.rememberGoal(selectedProfile, threadId, goal);
+      else if (method === 'thread/goal/get') this.rememberGoal(selectedProfile, threadId, undefined);
+    } else if (threadId && method === 'thread/goal/clear') {
+      this.rememberGoal(selectedProfile, threadId, undefined);
+    }
+    return result;
   }
 
   async appServerEndpoint(profile?: string): Promise<string> {
@@ -214,8 +232,16 @@ export class CodexAdapter implements AgentAdapter {
     client: CodexAppServerClient,
     notification: RpcNotification,
   ): void {
+    const notificationParams = recordValue(notification.params);
+    const notificationThreadId = stringValue(notificationParams?.threadId);
+    if (notificationThreadId && notification.method === 'thread/goal/updated') {
+      const goal = parseCodexGoal(notificationParams?.goal);
+      if (goal) this.rememberGoal(profile, notificationThreadId, goal);
+    } else if (notificationThreadId && notification.method === 'thread/goal/cleared') {
+      this.rememberGoal(profile, notificationThreadId, undefined);
+    }
     if (notification.method !== 'turn/started') return;
-    const params = recordValue(notification.params);
+    const params = notificationParams;
     const threadId = stringValue(params?.threadId);
     const turnId = stringValue(recordValue(params?.turn)?.id) ?? stringValue(params?.turnId);
     if (!threadId || !turnId) return;
@@ -229,6 +255,7 @@ export class CodexAdapter implements AgentAdapter {
       client,
       binding,
       turnId,
+      initialGoal: this.threadGoals.get(threadKey),
       onFinish: () => this.externalRuns.delete(externalKey),
     });
     this.externalRuns.set(externalKey, run);
@@ -240,6 +267,16 @@ export class CodexAdapter implements AgentAdapter {
     if (active) this.bridgeActiveThreads.add(key);
     else this.bridgeActiveThreads.delete(key);
   }
+
+  private rememberGoal(
+    profile: string | undefined,
+    threadId: string,
+    goal: AgentGoal | undefined,
+  ): void {
+    const key = remoteThreadKey(profile, threadId);
+    if (goal) this.threadGoals.set(key, goal);
+    else this.threadGoals.delete(key);
+  }
 }
 
 interface CodexAppServerRunInput {
@@ -247,6 +284,8 @@ interface CodexAppServerRunInput {
   options: AgentRunOptions & { cwd: string; sandbox: SandboxMode };
   loadProfileConfig?: () => Promise<Record<string, unknown>>;
   botIdentity?: AgentBotIdentity;
+  initialGoal?: AgentGoal;
+  rememberGoal(threadId: string, goal: AgentGoal | undefined): void;
   setBridgeThreadActive(profile: string | undefined, threadId: string, active: boolean): void;
 }
 
@@ -258,6 +297,8 @@ class CodexAppServerRun implements AgentRun {
   private readonly options: CodexAppServerRunInput['options'];
   private readonly loadProfileConfig: CodexAppServerRunInput['loadProfileConfig'];
   private readonly botIdentity: AgentBotIdentity | undefined;
+  private readonly initialGoal: AgentGoal | undefined;
+  private readonly rememberGoal: CodexAppServerRunInput['rememberGoal'];
   private readonly setBridgeThreadActive: CodexAppServerRunInput['setBridgeThreadActive'];
   private readonly queue = new AsyncEventQueue<AgentEvent>();
   private readonly exited: Promise<void>;
@@ -276,6 +317,8 @@ class CodexAppServerRun implements AgentRun {
     this.options = input.options;
     this.loadProfileConfig = input.loadProfileConfig;
     this.botIdentity = input.botIdentity;
+    this.initialGoal = input.initialGoal;
+    this.rememberGoal = input.rememberGoal;
     this.setBridgeThreadActive = input.setBridgeThreadActive;
     this.runId = input.options.runId;
     this.events = this.queue;
@@ -346,6 +389,13 @@ class CodexAppServerRun implements AgentRun {
         cwd: stringValue(response?.cwd) ?? this.options.cwd,
         model: stringValue(response?.model) ?? this.options.model,
       });
+      const goal = this.initialGoal ?? parseCodexGoal(
+        recordValue(await this.client.request('thread/goal/get', { threadId }))?.goal,
+      );
+      if (goal) {
+        this.rememberGoal(threadId, goal);
+        this.queue.push({ type: 'goal_update', goal });
+      }
 
       if (this.stopRequested) {
         this.finish(this.translator.interrupt());
@@ -445,6 +495,7 @@ interface CodexExternalRunInput {
   client: CodexAppServerClient;
   binding: AgentRemoteThreadBinding;
   turnId: string;
+  initialGoal?: AgentGoal;
   onFinish(): void;
 }
 
@@ -480,6 +531,7 @@ class CodexExternalRun implements AgentRun {
       threadId: input.binding.threadId,
       cwd: input.binding.cwd,
     });
+    if (input.initialGoal) this.queue.push({ type: 'goal_update', goal: input.initialGoal });
     this.unsubscribe = this.client.onNotification((notification) => {
       const events = this.translator.translate(notification);
       if (!events.length) return;

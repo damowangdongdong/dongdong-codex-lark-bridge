@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { CODEX_GOAL_CONTINUATION_CLIENT_ID } from '../../../src/agent/goal.js';
 import { CodexAppServerEventTranslator } from '../../../src/agent/codex/app-server-events.js';
 
 describe('Codex app-server event translator', () => {
@@ -469,7 +470,14 @@ describe('Codex app-server event translator', () => {
         verifications: ['trustedAccessForCyber'],
       }),
     ])).toEqual([
-      { type: 'thinking', delta: '\n\nPlan update:\nExecution order\n✓ Inspect\n→ Patch' },
+      {
+        type: 'plan_update',
+        explanation: 'Execution order',
+        steps: [
+          { step: 'Inspect', status: 'completed' },
+          { step: 'Patch', status: 'inProgress' },
+        ],
+      },
       {
         type: 'notice',
         level: 'warning',
@@ -485,6 +493,58 @@ describe('Codex app-server event translator', () => {
         level: 'warning',
         message: 'Codex requires verification: trustedAccessForCyber',
       },
+    ]);
+  });
+
+  it('preserves goal metrics and hides the bridge-only continuation prompt', () => {
+    const translator = new CodexAppServerEventTranslator('thread-1');
+    translator.setTurnId('turn-1');
+
+    expect(translateAll(translator, [
+      notification('thread/goal/updated', {
+        goal: {
+          threadId: 'thread-1',
+          objective: 'Ship the bridge',
+          status: 'active',
+          tokenBudget: 20_000,
+          tokensUsed: 1_250,
+          timeUsedSeconds: 65,
+          createdAt: 10,
+          updatedAt: 20,
+        },
+      }),
+      notification('item/started', {
+        item: {
+          id: 'goal-prompt',
+          type: 'userMessage',
+          clientId: CODEX_GOAL_CONTINUATION_CLIENT_ID,
+          content: [{ type: 'text', text: '请开始执行当前 goal。' }],
+        },
+      }),
+      notification('item/completed', {
+        item: {
+          id: 'goal-prompt',
+          type: 'userMessage',
+          clientId: CODEX_GOAL_CONTINUATION_CLIENT_ID,
+          content: [{ type: 'text', text: '请开始执行当前 goal。' }],
+        },
+      }),
+      notification('thread/goal/cleared', {}),
+    ])).toEqual([
+      {
+        type: 'goal_update',
+        goal: {
+          objective: 'Ship the bridge',
+          status: 'active',
+          tokenBudget: 20_000,
+          tokensUsed: 1_250,
+          timeUsedSeconds: 65,
+          createdAt: 10,
+          updatedAt: 20,
+          observedAtMs: expect.any(Number),
+        },
+      },
+      { type: 'goal_clear' },
     ]);
   });
 });
