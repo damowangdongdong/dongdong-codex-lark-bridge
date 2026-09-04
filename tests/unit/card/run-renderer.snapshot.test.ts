@@ -18,12 +18,27 @@ describe('run card renderer snapshots', () => {
   });
 
   it('renders active and completed thinking', () => {
-    expectCard(stateFrom([{ type: 'thinking', delta: 'checking options' }])).toMatchSnapshot();
+    const active = stateFrom([{ type: 'thinking', delta: 'checking options' }]);
+    expectCard(active).toMatchSnapshot();
+    expect(findPanel(active, '思考中')).toMatchObject({ expanded: false });
+
     expectCard(stateFrom([
       { type: 'thinking', delta: 'checking options' },
       { type: 'text', delta: 'final answer' },
       { type: 'done', terminationReason: 'normal' },
     ])).toMatchSnapshot();
+  });
+
+  it('keeps Codex reminders collapsed while errors stay prominent', () => {
+    const warning = stateFrom([
+      { type: 'notice', level: 'warning', message: 'Using the fallback model.' },
+    ]);
+    const error = stateFrom([
+      { type: 'notice', level: 'error', message: 'The request failed.' },
+    ]);
+
+    expect(findPanel(warning, 'Codex 提示')).toMatchObject({ expanded: false });
+    expect(findPanel(error, 'Codex 错误')).toMatchObject({ expanded: true });
   });
 
   it('renders tool running, done, and error states', () => {
@@ -210,4 +225,11 @@ function stateFrom(events: AgentEvent[]): RunState {
 
 function expectCard(state: RunState) {
   return expect(normalizeCard(renderCard(state)));
+}
+
+function findPanel(state: RunState, title: string): Record<string, unknown> | undefined {
+  const card = renderCard(state) as { body: { elements: Array<Record<string, unknown>> } };
+  return card.body.elements.find((element) =>
+    element.tag === 'collapsible_panel' && JSON.stringify(element).includes(title),
+  );
 }

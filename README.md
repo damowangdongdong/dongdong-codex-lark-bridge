@@ -163,7 +163,7 @@ Web 控制台的会议设置还包括：被邀请时自动入会、字幕保留�
 
 ## Codex CLI 命令覆盖
 
-Codex profile 使用常驻 `codex app-server`。运行卡只展示状态和折叠的工具记录，不再放置插入、排队或停止按钮。运行中直接 `@bot 内容` 会 steer 当前 turn：旧流式卡会冻结并标记“已在下方接续”，新流式卡以这条插入消息为锚点继续；`/queue <指令>` 会排到下一轮；`/interupt`（`/interrupt`）等效 Codex CLI 的 Esc，打断当前 turn 并保留队列；`/stop` 则立即停止并清空排队消息。同一 turn、同一请求内的多次 Codex 重试会聚合为一个默认折叠面板，标题持续显示当前 attempt、等待时间和累计次数，不会跨 turn 合并。`/goal <目标>` 通过 app-server 更新持久目标，不打断当前 turn，也不清理队列。普通 turn 只发送运行卡和最终回复，不会额外重复发送完整轨迹；恢复历史后可通过选择卡按需发送聚合的历史上下文。发送 `/codex commands` 可以在飞书里随时查看当前版本（兼容 Codex 0.152.x）的清单。
+Codex profile 使用常驻 `codex app-server`。运行卡只展示状态，以及默认折叠的思考、Codex 提示和工具记录，不再放置插入、排队或停止按钮；真正的 Codex 错误仍会展开显示。运行中直接 `@bot 内容` 会 steer 当前 turn：旧流式卡会冻结并标记“已在下方接续”，新流式卡以这条插入消息为锚点继续；`/queue <指令>` 会排到下一轮；`/interupt`（`/interrupt`）等效 Codex CLI 的 Esc，打断当前 turn 并保留队列；`/stop` 则立即停止并清空排队消息。同一 turn、同一请求内的多次 Codex 重试会聚合为一个默认折叠面板，标题持续显示当前 attempt、等待时间和累计次数，不会跨 turn 合并。`/goal <目标>` 通过 app-server 更新持久目标，不打断当前 turn，也不清理队列。普通 turn 只发送运行卡和最终回复，不会额外重复发送完整轨迹；恢复历史后可通过选择卡按需发送聚合的历史上下文。发送 `/codex commands` 可以在飞书里随时查看当前版本（兼容 Codex 0.152.x）的清单。
 
 ### app-server 命令
 

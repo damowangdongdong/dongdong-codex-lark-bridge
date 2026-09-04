@@ -119,7 +119,7 @@ exports[`run card renderer snapshots > renders active and completed thinking 1`]
             "text_size": "notation",
           },
         ],
-        "expanded": true,
+        "expanded": false,
         "header": {
           "icon": {
             "size": "16px 16px",
@@ -129,7 +129,7 @@ exports[`run card renderer snapshots > renders active and completed thinking 1`]
           "icon_expanded_angle": -180,
           "icon_position": "follow_text",
           "title": {
-            "content": "🧠 **思考中**",
+            "content": "🧠 **思考中，点击查看**",
             "tag": "markdown",
           },
           "vertical_align": "center",
