@@ -21,6 +21,7 @@ describe('WorkspaceStore new chat inheritance', () => {
     store.confirmCodexResume('dm');
     store.setCodexSandbox('dm', 'danger-full-access');
     store.setCodexModel('dm', 'gpt-test');
+    store.setCodexEffort('dm', 'high');
     store.setCodexPersonality('dm', 'pragmatic');
     store.inheritForNewScope('dm', 'project-chat', '/repo/project');
     await store.flush();
@@ -33,6 +34,7 @@ describe('WorkspaceStore new chat inheritance', () => {
       launchMode: 'new',
       codexSandbox: 'danger-full-access',
       codexModel: 'gpt-test',
+      codexEffort: 'high',
       codexPersonality: 'pragmatic',
     });
   });

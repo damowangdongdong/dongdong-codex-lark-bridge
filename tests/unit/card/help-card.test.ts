@@ -22,6 +22,7 @@ describe('help card', () => {
     expect(rendered).toContain('/interupt');
     expect(rendered).toContain('/queue <指令>');
     expect(rendered).toContain('/goal');
+    expect(rendered).toContain('Codex 模型与 reasoning effort');
     expect(rendered).not.toContain('立即插入');
     expect(rendered).not.toContain('⇥ 排队');
     expect(rendered).toContain('/codex commands');

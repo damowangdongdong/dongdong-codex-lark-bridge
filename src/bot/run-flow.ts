@@ -174,6 +174,10 @@ export async function startRunFlow(input: StartRunFlowInput): Promise<StartRunFl
               resolveModelArg('codex', input.profileConfig.preferences.model),
             )
           : resolveModelArg('claude', input.profileConfig.preferences.model),
+      effort:
+        input.capability.agentId === 'codex'
+          ? input.workspaces.codexEffortFor(input.scopeId)
+          : undefined,
       personality:
         input.capability.agentId === 'codex'
           ? input.workspaces.codexPersonalityFor(input.scopeId)

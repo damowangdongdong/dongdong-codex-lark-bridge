@@ -89,6 +89,96 @@ export interface CodexProfileCardOptions {
   configuredProfile?: string;
 }
 
+export interface CodexModelPickerOption {
+  value: string;
+  label: string;
+  supportedEfforts: string[];
+}
+
+export interface CodexModelCardOptions {
+  models: CodexModelPickerOption[];
+  currentModel: string;
+  currentEffort: string;
+}
+
+/** Form card returned by `/model` for selecting both model and reasoning effort. */
+export function codexModelCard(options: CodexModelCardOptions): object {
+  const modelValues = new Set(options.models.map((model) => model.value));
+  const currentModel = modelValues.has(options.currentModel) ? options.currentModel : 'default';
+  const effortValues = [...new Set(options.models.flatMap((model) => model.supportedEfforts))];
+  const preferredOrder = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'ultra'];
+  effortValues.sort((left, right) => {
+    const leftIndex = preferredOrder.indexOf(left);
+    const rightIndex = preferredOrder.indexOf(right);
+    if (leftIndex === -1 && rightIndex === -1) return left.localeCompare(right);
+    if (leftIndex === -1) return 1;
+    if (rightIndex === -1) return -1;
+    return leftIndex - rightIndex;
+  });
+  const currentEffort = effortValues.includes(options.currentEffort)
+    ? options.currentEffort
+    : 'default';
+
+  return {
+    schema: '2.0',
+    config: { summary: { content: '选择 Codex 模型与 effort' } },
+    header: {
+      template: 'blue',
+      title: { tag: 'plain_text', content: '🧠 Codex 模型与 effort' },
+    },
+    body: {
+      elements: [
+        {
+          tag: 'markdown',
+          content:
+            '选择当前聊天或话题后续 turn 使用的模型和推理强度。' +
+            '「跟随默认」会让 Codex 使用所选模型或账号的默认值。',
+        },
+        {
+          tag: 'form',
+          name: 'codex_model_form',
+          elements: [
+            { tag: 'markdown', content: '**模型**' },
+            {
+              tag: 'select_static',
+              name: 'codex_model',
+              initial_option: currentModel,
+              options: options.models.map((model) => ({
+                text: { tag: 'plain_text', content: model.label },
+                value: model.value,
+              })),
+            },
+            { tag: 'markdown', content: '**Reasoning effort**' },
+            {
+              tag: 'select_static',
+              name: 'codex_effort',
+              initial_option: currentEffort,
+              options: [
+                {
+                  text: { tag: 'plain_text', content: '跟随所选模型默认' },
+                  value: 'default',
+                },
+                ...effortValues.map((effort) => ({
+                  text: { tag: 'plain_text', content: effort },
+                  value: effort,
+                })),
+              ],
+            },
+            {
+              tag: 'button',
+              name: 'model_submit',
+              text: { tag: 'plain_text', content: '应用设置' },
+              type: 'primary',
+              form_action_type: 'submit',
+              behaviors: [{ type: 'callback', value: { cmd: 'model.submit' } }],
+            },
+          ],
+        },
+      ],
+    },
+  };
+}
+
 export function codexProfileCard(options: CodexProfileCardOptions): object {
   const initialProfile = options.configuredProfile && options.profiles.includes(options.configuredProfile)
     ? options.configuredProfile
@@ -705,7 +795,7 @@ export function helpCard(agentName = 'Agent', botName?: string): object {
       '- `/skill` → 示例：`/skill research-pipeline 先分析目标`；效果：调用指定 skill；无 thread 时自动创建。',
       '- `/skills` → 示例：`/skills`；效果：分页列出技能，每页 6 个并可展开查看说明。',
       '- `/mcp` → 示例：`/mcp verbose`；效果：查看 MCP 服务状态；`verbose` 显示更完整的工具和授权信息。',
-      '- `/model` → 示例：`/model`；效果：查看或切换当前 Codex 模型。',
+      '- `/model` → 示例：`/model`；效果：打开下拉框，选择当前 scope 的 Codex 模型与 reasoning effort。',
       '- `/fast` → 示例：`/fast`；效果：查看或切换快速模式。',
       '- `/plan` → 示例：`/plan`；效果：查看或切换 Codex 计划模式。',
       '- `/goal <目标>` → 示例：`/goal 修复登录超时`；效果：按 Codex CLI 语义更新持久目标，不打断当前 turn，也不会清理排队消息；`/goal pause|resume|clear` 管理状态。',

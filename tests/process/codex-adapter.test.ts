@@ -56,6 +56,7 @@ experimental_bearer_token = "secret-token"
       },
       cwd,
       profile: 'freerouter',
+      effort: 'high',
       sandbox: 'workspace-write',
     });
 
@@ -116,6 +117,7 @@ experimental_bearer_token = "secret-token"
         },
       },
       cwd,
+      effort: 'high',
       approvalPolicy: 'never',
       sandboxPolicy: {
         type: 'workspaceWrite',

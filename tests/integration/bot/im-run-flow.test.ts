@@ -125,6 +125,29 @@ describe('IM run flow', () => {
     expect(h.agent.runOptions).toEqual([]);
   });
 
+  it('passes the scope reasoning effort into Codex turns', async () => {
+    const h = await createHarness({ agentKind: 'codex' });
+    h.workspaces.setCwd('chat-1', h.tmp.workspace);
+    h.workspaces.setCodexEffort('chat-1', 'xhigh');
+
+    const result = await startRunFlow({
+      scopeId: 'chat-1',
+      scope: { source: 'im', chatId: 'chat-1', actorId: 'ou_user' },
+      prompt: 'reason carefully',
+      attachments: [],
+      access: { ok: true, reason: 'allowed-user' },
+      capability: codexCapability(h.profileConfig),
+      profileConfig: h.profileConfig,
+      sessions: h.sessions,
+      workspaces: h.workspaces,
+      executor: h.executor,
+      now: 1000,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(h.agent.runOptions[0]?.effort).toBe('xhigh');
+  });
+
 });
 
 async function createHarness(options: {

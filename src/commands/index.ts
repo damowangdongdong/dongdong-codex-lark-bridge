@@ -30,6 +30,8 @@ import { GROUP_MSG_SCOPE, hasGroupMsgScope } from '../bot/app-scope';
 import { requestScopeGrantLink } from '../bot/wizard';
 import { forgetManagedCard, sendManagedCard, updateManagedCard } from '../card/managed';
 import {
+  codexModelCard,
+  type CodexModelPickerOption,
   codexSkillsCard,
   helpCard,
   codexProfileCard,
@@ -316,8 +318,9 @@ export async function runCommandHandler(
   args: string,
   ctx: CommandContext,
 ): Promise<boolean> {
-  const h = handlers[`/${name}`];
-  if (!h) return false;
+  const cmd = `/${name}`;
+  const h = handlers[cmd];
+  if (!h && (ctx.agent.id !== 'codex' || !codexSlashSurface(cmd))) return false;
   if (
     isAdminCommand(name) &&
     !canRunAdminCommand(ctx.controls.profileConfig, ctx.controls, ctx.msg.senderId).ok
@@ -333,7 +336,8 @@ export async function runCommandHandler(
     return true;
   }
   try {
-    await h(args, ctx);
+    if (h) await h(args, ctx);
+    else await handleCodexSlash(cmd, args, ctx);
   } catch (err) {
     log.fail('command', err, { cmd: name });
     reportMetric('command_fail', 1, { step: 'handler' });
@@ -715,32 +719,123 @@ async function handleCodexSlash(cmd: string, args: string, ctx: CommandContext):
 
 async function handleCodexModel(args: string, ctx: CommandContext): Promise<void> {
   const value = args.trim();
+  if (value === 'submit' && ctx.formValue) {
+    await submitCodexModel(ctx);
+    return;
+  }
   if (value) {
     const cwd = await requireCodexWorkspace(ctx);
     if (!cwd) return;
     ctx.workspaces.setCodexModel(ctx.scope, value === 'default' ? null : value);
     if (!ctx.activeRuns.get(ctx.scope)) {
-      const effectiveModel = value === 'default'
-        ? resolveModelArg('codex', ctx.controls.profileConfig.preferences.model)
-        : value;
-      if (effectiveModel) {
-        await updateCodexThreadSettingsIfPresent(ctx, { model: effectiveModel });
-      }
+      await updateCodexThreadSettingsIfPresent(ctx, {
+        model: value === DEFAULT_MODEL ? null : value,
+      });
     }
     await reply(ctx, value === 'default' ? '✓ 后续 turn 跟随 Codex 默认模型。' : `✓ 后续 turn 使用模型 **${value}**。`);
     return;
   }
-  const result = await codexRpc(ctx, 'model/list', { limit: 100, includeHidden: false });
-  const models = resultData(result)
-    .map((entry) => recordValue(entry))
-    .filter((entry): entry is Record<string, unknown> => Boolean(entry))
-    .map((entry) => String(entry.displayName ?? entry.model ?? entry.id ?? ''))
-    .filter(Boolean);
-  const current = ctx.workspaces.codexModelFor(
+  const models = await listCodexModelOptions(ctx);
+  const card = codexModelCard({
+    models: withDefaultCodexModel(models),
+    currentModel: currentCodexModelSelection(ctx),
+    currentEffort: ctx.workspaces.codexEffortFor(ctx.scope) ?? DEFAULT_MODEL,
+  });
+  await ctx.channel.send(ctx.msg.chatId, { card }, commandReplyOptions(ctx));
+}
+
+async function submitCodexModel(ctx: CommandContext): Promise<void> {
+  if (!await requireCodexWorkspace(ctx)) return;
+  const models = await listCodexModelOptions(ctx);
+  const selectedModel = String(ctx.formValue?.codex_model ?? '').trim();
+  const selectedEffort = String(ctx.formValue?.codex_effort ?? '').trim();
+  const model = selectedModel === DEFAULT_MODEL
+    ? models.find((entry) => entry.isDefault)
+    : models.find((entry) => entry.value === selectedModel);
+  if (selectedModel !== DEFAULT_MODEL && !model) {
+    await reply(ctx, '所选模型已不在 Codex 可用列表中，请重新发送 `/model` 选择。');
+    return;
+  }
+  if (!selectedEffort || (
+    selectedEffort !== DEFAULT_MODEL &&
+    model &&
+    !model.supportedEfforts.includes(selectedEffort)
+  )) {
+    await reply(ctx, '所选 effort 不受该模型支持，请重新发送 `/model` 选择。');
+    return;
+  }
+  ctx.workspaces.setCodexModel(
     ctx.scope,
-    resolveModelArg('codex', ctx.controls.profileConfig.preferences.model),
-  ) ?? '默认';
-  await reply(ctx, `当前模型：**${current}**\n\n${models.length ? models.map((model) => `- ${model}`).join('\n') : '没有可用模型信息。'}\n\n设置：\`/model <model-id>\`；恢复默认：\`/model default\``);
+    selectedModel === DEFAULT_MODEL ? null : selectedModel,
+  );
+  ctx.workspaces.setCodexEffort(
+    ctx.scope,
+    selectedEffort === DEFAULT_MODEL ? null : selectedEffort,
+  );
+  if (!ctx.activeRuns.get(ctx.scope)) {
+    await updateCodexThreadSettingsIfPresent(ctx, {
+      model: selectedModel === DEFAULT_MODEL ? null : selectedModel,
+      effort: selectedEffort === DEFAULT_MODEL ? null : selectedEffort,
+    });
+  }
+  const modelLabel = selectedModel === DEFAULT_MODEL ? 'Codex 默认模型' : selectedModel;
+  const effortLabel = selectedEffort === DEFAULT_MODEL ? '模型默认' : selectedEffort;
+  await reply(
+    ctx,
+    `✓ 后续 turn 使用模型 **${modelLabel}**，reasoning effort 为 **${effortLabel}**。`,
+  );
+}
+
+interface CodexModelOptionWithDefault extends CodexModelPickerOption {
+  isDefault: boolean;
+}
+
+async function listCodexModelOptions(ctx: CommandContext): Promise<CodexModelOptionWithDefault[]> {
+  const result = await codexRpc(ctx, 'model/list', { limit: 100, includeHidden: false });
+  const seen = new Set<string>();
+  const models: CodexModelOptionWithDefault[] = [];
+  for (const rawEntry of resultData(result)) {
+    const entry = recordValue(rawEntry);
+    if (!entry) continue;
+    const value = stringValue(entry.model) ?? stringValue(entry.id);
+    if (!value || seen.has(value)) continue;
+    seen.add(value);
+    const efforts = Array.isArray(entry.supportedReasoningEfforts)
+      ? entry.supportedReasoningEfforts
+          .map(recordValue)
+          .map((effort) => stringValue(effort?.reasoningEffort))
+          .filter((effort): effort is string => Boolean(effort))
+      : [];
+    models.push({
+      value,
+      label: stringValue(entry.displayName) ?? value,
+      supportedEfforts: [...new Set(efforts)],
+      isDefault: entry.isDefault === true,
+    });
+  }
+  return models;
+}
+
+function withDefaultCodexModel(
+  models: CodexModelOptionWithDefault[],
+): CodexModelPickerOption[] {
+  return [
+    {
+      value: DEFAULT_MODEL,
+      label: '跟随 Codex 默认模型',
+      supportedEfforts: models.find((model) => model.isDefault)?.supportedEfforts
+        ?? models.flatMap((model) => model.supportedEfforts),
+    },
+    ...models,
+  ];
+}
+
+function currentCodexModelSelection(ctx: CommandContext): string {
+  const scoped = ctx.workspaces.selectionFor(ctx.scope)?.codexModel;
+  if (scoped === null) return DEFAULT_MODEL;
+  return scoped
+    ?? resolveModelArg('codex', ctx.controls.profileConfig.preferences.model)
+    ?? DEFAULT_MODEL;
 }
 
 async function handleCodexPersonality(args: string, ctx: CommandContext): Promise<void> {
@@ -1154,6 +1249,7 @@ function codexTurnStartParams(
     ctx.scope,
     resolveModelArg('codex', ctx.controls.profileConfig.preferences.model),
   );
+  const effort = ctx.workspaces.codexEffortFor(ctx.scope);
   const personality = ctx.workspaces.codexPersonalityFor(ctx.scope);
   return {
     threadId,
@@ -1162,6 +1258,7 @@ function codexTurnStartParams(
     approvalPolicy: 'never',
     sandboxPolicy: codexSandboxPolicy(effectiveCodexSandbox(ctx), cwd),
     ...(model ? { model } : {}),
+    ...(effort ? { effort } : {}),
     ...(personality ? { personality } : {}),
   };
 }

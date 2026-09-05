@@ -86,6 +86,8 @@ export interface AgentRunOptions {
   sessionId?: string;
   threadId?: string;
   model?: string;
+  /** Codex reasoning effort override; omitted to follow the model default. */
+  effort?: string;
   personality?: 'friendly' | 'pragmatic' | 'none';
   /** Optional named Codex CLI config profile (`codex --profile <name>`). */
   profile?: string;

@@ -76,6 +76,7 @@ interface Harness {
     },
   ): Promise<void>;
   dispatchProfile(profile: string): Promise<void>;
+  dispatchModel(model: string, effort: string): Promise<void>;
   dispatchSkillsPage(page: number): Promise<void>;
 }
 
@@ -1043,6 +1044,58 @@ describe('agent-aware resume commands', () => {
     });
   });
 
+  it('renders live Codex model and effort dropdowns and applies their selection', async () => {
+    const h = await createHarness('codex');
+    h.catalog.upsertActive({ ...h.identity, threadId: 'thread-current', now: 1000 });
+    h.agent.setAppServerResponse('model/list', {
+      data: [
+        {
+          id: 'gpt-5.2-codex',
+          model: 'gpt-5.2-codex',
+          displayName: 'GPT-5.2-Codex',
+          isDefault: false,
+          supportedReasoningEfforts: [
+            { reasoningEffort: 'medium', description: 'Balanced' },
+            { reasoningEffort: 'high', description: 'Deeper reasoning' },
+          ],
+          defaultReasoningEffort: 'medium',
+        },
+        {
+          id: 'gpt-5.3-codex',
+          model: 'gpt-5.3-codex',
+          displayName: 'GPT-5.3-Codex',
+          isDefault: true,
+          supportedReasoningEfforts: [
+            { reasoningEffort: 'medium', description: 'Balanced' },
+            { reasoningEffort: 'high', description: 'Deeper reasoning' },
+            { reasoningEffort: 'xhigh', description: 'Extra high reasoning' },
+          ],
+          defaultReasoningEffort: 'high',
+        },
+      ],
+    });
+
+    await expect(h.run('/model')).resolves.toBe(true);
+    const rendered = lastContentString(h.channel);
+    expect(rendered).toContain('"name":"codex_model"');
+    expect(rendered).toContain('GPT-5.3-Codex');
+    expect(rendered).toContain('"name":"codex_effort"');
+    expect(rendered).toContain('"value":"xhigh"');
+
+    await h.dispatchModel('gpt-5.3-codex', 'xhigh');
+    expect(h.workspaces.codexModelFor('chat-1')).toBe('gpt-5.3-codex');
+    expect(h.workspaces.codexEffortFor('chat-1')).toBe('xhigh');
+    expect(h.agent.appServerRequests.slice(-3)).toMatchObject([
+      { method: 'model/list' },
+      { method: 'thread/resume', params: { threadId: 'thread-current' } },
+      {
+        method: 'thread/settings/update',
+        params: { threadId: 'thread-current', model: 'gpt-5.3-codex', effort: 'xhigh' },
+      },
+    ]);
+    expect(lastMarkdown(h.channel)).toContain('reasoning effort 为 **xhigh**');
+  });
+
   it('starts a new Codex thread when /skill invokes a skill first', async () => {
     const h = await createHarness('codex');
     h.agent.setAppServerResponse('thread/start', {
@@ -1606,6 +1659,31 @@ async function createHarness(
     });
   };
 
+  const dispatchModel = (model: string, effort: string): Promise<void> => {
+    cardModes.set('chat-1', 'p2p');
+    return handleCardAction({
+      channel: channel as unknown as Parameters<typeof handleCardAction>[0]['channel'],
+      evt: cardEvent(
+        { cmd: 'model.submit' },
+        { codex_model: model, codex_effort: effort },
+        'chat-1',
+      ),
+      sessions,
+      sessionCatalog: catalog,
+      workspaces,
+      activeRuns,
+      agent,
+      controls,
+      pending,
+      chatModeCache,
+      codexHistoryProvider: async (options) => {
+        codexHistoryRequests.push(options);
+        return codexHistory;
+      },
+      claudeHistoryProvider: async () => claudeHistory,
+    });
+  };
+
   const dispatchSkillsPage = (page: number): Promise<void> => {
     cardModes.set('chat-1', 'p2p');
     return handleCardAction({
@@ -1654,6 +1732,7 @@ async function createHarness(
     dispatchTakeoverArg,
     dispatchLaunch,
     dispatchProfile,
+    dispatchModel,
     dispatchSkillsPage,
   };
 }

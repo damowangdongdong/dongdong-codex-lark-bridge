@@ -184,7 +184,7 @@ Codex profile 使用常驻 `codex app-server`。运行卡只展示状态，以�
 | `/skill` | `/skill research-pipeline 先分析目标` | 在当前 thread 调用指定 skill；没有 thread 时自动创建。 |
 | `/skills` | `/skills` | 分页列出可用技能；每页 6 个并可展开查看说明。 |
 | `/mcp` | `/mcp verbose` | 查看 MCP 服务状态；`verbose` 显示完整工具和授权信息。 |
-| `/model` | `/model` | 查看或切换当前 Codex 模型。 |
+| `/model` | `/model` | 打开下拉框，选择当前聊天/话题的 Codex 模型与 reasoning effort。 |
 | `/fast` | `/fast` | 查看或切换快速模式。 |
 | `/plan` | `/plan` | 查看或切换 Codex 计划模式。 |
 | `/goal` | `/goal 修复登录超时` | 创建或更新持久目标；`pause`、`resume`、`clear` 管理状态。 |

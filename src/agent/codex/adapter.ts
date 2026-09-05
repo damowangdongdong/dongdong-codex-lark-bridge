@@ -408,6 +408,7 @@ class CodexAppServerRun implements AgentRun {
         approvalPolicy: 'never',
         sandboxPolicy: sandboxPolicy(this.options.sandbox, this.options.cwd),
         ...(this.options.model ? { model: this.options.model } : {}),
+        ...(this.options.effort ? { effort: this.options.effort } : {}),
         ...(this.options.personality ? { personality: this.options.personality } : {}),
       });
       const turnId = stringValue(recordValue(recordValue(turnResponse)?.turn)?.id);

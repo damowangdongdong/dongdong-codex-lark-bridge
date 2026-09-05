@@ -18,6 +18,8 @@ export interface WorkspaceSelection {
   /** Per-scope Codex permission selection. */
   codexSandbox?: CodexSandboxMode;
   codexModel?: string | null;
+  /** Per-scope Codex reasoning effort. `null` follows the selected model default. */
+  codexEffort?: string | null;
   codexPersonality?: 'friendly' | 'pragmatic' | 'none';
 }
 
@@ -81,6 +83,7 @@ export class WorkspaceStore {
       ...(previous?.launchPending ? { launchPending: true } : {}),
       ...(previous?.codexSandbox ? { codexSandbox: previous.codexSandbox } : {}),
       ...(previous?.codexModel !== undefined ? { codexModel: previous.codexModel } : {}),
+      ...(previous?.codexEffort !== undefined ? { codexEffort: previous.codexEffort } : {}),
       ...(previous?.codexPersonality ? { codexPersonality: previous.codexPersonality } : {}),
     };
     this.schedulePersist();
@@ -96,6 +99,7 @@ export class WorkspaceStore {
         : {}),
       ...(source?.codexSandbox ? { codexSandbox: source.codexSandbox } : {}),
       ...(source?.codexModel !== undefined ? { codexModel: source.codexModel } : {}),
+      ...(source?.codexEffort !== undefined ? { codexEffort: source.codexEffort } : {}),
       ...(source?.codexPersonality ? { codexPersonality: source.codexPersonality } : {}),
     };
     this.schedulePersist();
@@ -113,6 +117,7 @@ export class WorkspaceStore {
       ...(previous?.launchMode ? { launchMode: previous.launchMode } : {}),
       ...(previous?.codexSandbox ? { codexSandbox: previous.codexSandbox } : {}),
       ...(previous?.codexModel !== undefined ? { codexModel: previous.codexModel } : {}),
+      ...(previous?.codexEffort !== undefined ? { codexEffort: previous.codexEffort } : {}),
       ...(previous?.codexPersonality ? { codexPersonality: previous.codexPersonality } : {}),
     };
     this.schedulePersist();
@@ -144,6 +149,7 @@ export class WorkspaceStore {
       ...(launchMode === 'resume' ? { launchPending: true } : {}),
       ...(previous.codexSandbox ? { codexSandbox: previous.codexSandbox } : {}),
       ...(previous.codexModel !== undefined ? { codexModel: previous.codexModel } : {}),
+      ...(previous.codexEffort !== undefined ? { codexEffort: previous.codexEffort } : {}),
       ...(previous.codexPersonality ? { codexPersonality: previous.codexPersonality } : {}),
     };
     this.schedulePersist();
@@ -200,6 +206,18 @@ export class WorkspaceStore {
     const value = this.data.chats[chatId]?.codexModel;
     if (value === null) return undefined;
     return typeof value === 'string' && value.trim() ? value : fallback;
+  }
+
+  setCodexEffort(chatId: string, effort: string | null): void {
+    const previous = this.data.chats[chatId];
+    if (!previous?.cwd) throw new Error(`workspace cwd is not set for scope: ${chatId}`);
+    this.data.chats[chatId] = { ...previous, codexEffort: effort };
+    this.schedulePersist();
+  }
+
+  codexEffortFor(chatId: string): string | undefined {
+    const value = this.data.chats[chatId]?.codexEffort;
+    return typeof value === 'string' && value.trim() ? value : undefined;
   }
 
   setCodexPersonality(chatId: string, personality: 'friendly' | 'pragmatic' | 'none'): void {

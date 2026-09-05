@@ -21,6 +21,7 @@ export interface SubmitRunInput {
   sessionId?: string;
   threadId?: string;
   model?: string;
+  effort?: string;
   personality?: 'friendly' | 'pragmatic' | 'none';
   profile?: string;
   images?: readonly string[];
@@ -103,6 +104,7 @@ export class RunExecutor {
       sessionId: input.sessionId,
       threadId: input.threadId,
       model: input.model,
+      effort: input.effort,
       personality: input.personality,
       profile: input.profile,
       images: input.images,
