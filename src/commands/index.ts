@@ -782,7 +782,16 @@ async function submitCodexModel(ctx: CommandContext): Promise<void> {
   const effortLabel = selectedEffort === DEFAULT_MODEL ? '模型默认' : selectedEffort;
   await reply(
     ctx,
-    `✓ 后续 turn 使用模型 **${modelLabel}**，reasoning effort 为 **${effortLabel}**。`,
+    [
+      '✅ **模型设置成功**',
+      '',
+      `当前模型：**${modelLabel}**`,
+      `当前 reasoning effort：**${effortLabel}**`,
+      '',
+      ctx.activeRuns.get(ctx.scope)
+        ? '_当前 turn 不受影响，新设置从下一个 turn 生效。_'
+        : '_新设置已应用于当前 scope 的后续 turn。_',
+    ].join('\n'),
   );
 }
 

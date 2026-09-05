@@ -1083,6 +1083,7 @@ describe('agent-aware resume commands', () => {
     expect(rendered).toContain('"value":"xhigh"');
 
     await h.dispatchModel('gpt-5.3-codex', 'xhigh');
+    expect(h.channel.sent).toHaveLength(2);
     expect(h.workspaces.codexModelFor('chat-1')).toBe('gpt-5.3-codex');
     expect(h.workspaces.codexEffortFor('chat-1')).toBe('xhigh');
     expect(h.agent.appServerRequests.slice(-3)).toMatchObject([
@@ -1093,7 +1094,9 @@ describe('agent-aware resume commands', () => {
         params: { threadId: 'thread-current', model: 'gpt-5.3-codex', effort: 'xhigh' },
       },
     ]);
-    expect(lastMarkdown(h.channel)).toContain('reasoning effort 为 **xhigh**');
+    expect(lastMarkdown(h.channel)).toContain('模型设置成功');
+    expect(lastMarkdown(h.channel)).toContain('当前模型：**gpt-5.3-codex**');
+    expect(lastMarkdown(h.channel)).toContain('当前 reasoning effort：**xhigh**');
   });
 
   it('starts a new Codex thread when /skill invokes a skill first', async () => {

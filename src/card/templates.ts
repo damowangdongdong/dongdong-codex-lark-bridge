@@ -795,7 +795,7 @@ export function helpCard(agentName = 'Agent', botName?: string): object {
       '- `/skill` → 示例：`/skill research-pipeline 先分析目标`；效果：调用指定 skill；无 thread 时自动创建。',
       '- `/skills` → 示例：`/skills`；效果：分页列出技能，每页 6 个并可展开查看说明。',
       '- `/mcp` → 示例：`/mcp verbose`；效果：查看 MCP 服务状态；`verbose` 显示更完整的工具和授权信息。',
-      '- `/model` → 示例：`/model`；效果：打开下拉框，选择当前 scope 的 Codex 模型与 reasoning effort。',
+      '- `/model` → 示例：`/model`；效果：打开下拉框选择当前 scope 的 Codex 模型与 reasoning effort，应用后另发一条消息确认当前设置。',
       '- `/fast` → 示例：`/fast`；效果：查看或切换快速模式。',
       '- `/plan` → 示例：`/plan`；效果：查看或切换 Codex 计划模式。',
       '- `/goal <目标>` → 示例：`/goal 修复登录超时`；效果：按 Codex CLI 语义更新持久目标，不打断当前 turn，也不会清理排队消息；`/goal pause|resume|clear` 管理状态。',
