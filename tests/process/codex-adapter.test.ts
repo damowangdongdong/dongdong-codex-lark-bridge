@@ -207,6 +207,27 @@ experimental_bearer_token = "secret-token"
     await expect(run.waitForExit(50)).resolves.toBe(true);
   });
 
+  it('does not hang stop when the app-server ignores turn/interrupt', async () => {
+    const fake = await createFakeCodex({ keepTurnOpen: true, ignoreInterrupt: true });
+    cleanup.push(fake.dir);
+    const cwd = await realpath(fake.dir);
+    const adapter = track(
+      new CodexAdapter({ binary: fake.path, profileStateDir: fake.dir }),
+      adapters,
+    );
+    const run = adapter.run({ runId: 'run-stuck-interrupt', prompt: 'stay open', cwd });
+    const iterator = run.events[Symbol.asyncIterator]();
+
+    expect(await iterator.next()).toMatchObject({
+      done: false,
+      value: { type: 'system', threadId: 'thread-new' },
+    });
+    await waitForMethod(fake.recordPath, 'turn/start');
+
+    await within(run.stop(), 3_000);
+    await waitForMethod(fake.recordPath, 'turn/interrupt');
+  });
+
   it('publishes turns started by another attached client for the bound Feishu scope', async () => {
     const fake = await createFakeCodex();
     cleanup.push(fake.dir);
@@ -289,7 +310,9 @@ async function collectIterator(iterator: AsyncIterator<AgentEvent>): Promise<Age
   }
 }
 
-async function createFakeCodex(options: { keepTurnOpen?: boolean } = {}): Promise<FakeBinary> {
+async function createFakeCodex(
+  options: { keepTurnOpen?: boolean; ignoreInterrupt?: boolean } = {},
+): Promise<FakeBinary> {
   const dir = await mkdtemp(join(tmpdir(), 'codex-app-server-test-'));
   const path = join(dir, 'fake-codex.mjs');
   const recordPath = join(dir, 'record.json');
@@ -307,6 +330,7 @@ function fakeServerSource(input: {
   recordPath: string;
   wsEntry: string;
   keepTurnOpen?: boolean;
+  ignoreInterrupt?: boolean;
 }): string {
   return `
 import { writeFileSync } from 'node:fs';
@@ -384,6 +408,7 @@ wss.on('connection', (socket) => {
       return;
     }
     if (message.method === 'turn/interrupt') {
+      if (${JSON.stringify(Boolean(input.ignoreInterrupt))}) return;
       respond({});
       notify('turn/completed', { threadId: message.params.threadId, turnId: message.params.turnId, turn: { id: message.params.turnId, status: 'interrupted' } });
     }

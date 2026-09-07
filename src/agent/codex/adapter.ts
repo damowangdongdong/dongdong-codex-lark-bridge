@@ -24,6 +24,8 @@ import {
   terminateProcess,
 } from './thread-writer';
 
+const INTERRUPT_REQUEST_TIMEOUT_MS = 2_000;
+
 export interface CodexAdapterOptions {
   binary: string;
   profileStateDir: string;
@@ -353,7 +355,11 @@ class CodexAppServerRun implements AgentRun {
     this.stopRequested = true;
     if (this.threadId && this.turnId) {
       await this.client
-        .request('turn/interrupt', { threadId: this.threadId, turnId: this.turnId })
+        .request(
+          'turn/interrupt',
+          { threadId: this.threadId, turnId: this.turnId },
+          { timeoutMs: INTERRUPT_REQUEST_TIMEOUT_MS },
+        )
         .catch((err) => log.warn('codex-app-server', 'interrupt-failed', { message: String(err) }));
     }
   }
@@ -566,10 +572,16 @@ class CodexExternalRun implements AgentRun {
 
   async stop(): Promise<void> {
     if (this.terminal) return;
-    await this.client.request('turn/interrupt', {
-      threadId: this.binding.threadId,
-      turnId: this.turnId,
-    });
+    await this.client
+      .request(
+        'turn/interrupt',
+        {
+          threadId: this.binding.threadId,
+          turnId: this.turnId,
+        },
+        { timeoutMs: INTERRUPT_REQUEST_TIMEOUT_MS },
+      )
+      .catch((err) => log.warn('codex-app-server', 'interrupt-failed', { message: String(err) }));
   }
 
   async waitForExit(timeoutMs: number): Promise<boolean> {
