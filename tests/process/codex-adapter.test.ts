@@ -290,6 +290,118 @@ experimental_bearer_token = "secret-token"
     );
     expect(() => adapter.run({ runId: 'missing-cwd', prompt: 'hi' })).toThrow(/cwd is required/);
   });
+
+  it('reads current credentials in a fresh process for every new conversation', async () => {
+    const fake = await createFakeCodex();
+    cleanup.push(fake.dir);
+    const cwd = await realpath(fake.dir);
+    const adapter = track(new CodexAdapter({ binary: fake.path, profileStateDir: fake.dir }), adapters);
+    await writeFile(join(fake.dir, 'test-auth.json'), JSON.stringify({ account: 'first' }));
+    // Model discovery/preflight must not let a new conversation reuse a cached login.
+    await adapter.appServerEndpoint();
+    await writeFile(join(fake.dir, 'test-auth.json'), JSON.stringify({ account: 'second' }));
+    const options = { runId: 'new-1', prompt: 'hello', cwd };
+    await adapter.prepareRun(options);
+    expect(await collect(adapter.run(options).events)).toContainEqual(expect.objectContaining({ type: 'done' }));
+    const first = await readRecord(fake.recordPath);
+    expect(first.auth).toEqual({ account: 'second' });
+
+    await writeFile(join(fake.dir, 'test-auth.json'), JSON.stringify({ account: 'third' }));
+    expect(await collect(adapter.run({ ...options, runId: 'new-2' }).events)).toContainEqual(expect.objectContaining({ type: 'done' }));
+    const second = await readRecord(fake.recordPath);
+    expect(second.auth).toEqual({ account: 'third' });
+    expect(second.pid).not.toBe(first.pid);
+
+    // Unchanged credentials still get re-read for a new conversation.
+    await collect(adapter.run({ ...options, runId: 'new-3' }).events);
+    const third = await readRecord(fake.recordPath);
+    expect(third.pid).not.toBe(second.pid);
+    await expectProcessDead(first.pid);
+    await expectProcessDead(second.pid);
+  });
+
+  it('keeps an older active turn routable while a new conversation reads the new login', async () => {
+    const fake = await createFakeCodex({ keepTurnOpen: true, uniqueThreadIds: true });
+    cleanup.push(fake.dir);
+    const cwd = await realpath(fake.dir);
+    const adapter = track(new CodexAdapter({ binary: fake.path, profileStateDir: fake.dir }), adapters);
+    await writeFile(join(fake.dir, 'test-auth.json'), JSON.stringify({ account: 'first' }));
+    const first = adapter.run({ runId: 'active-1', prompt: 'keep working', cwd });
+    const firstEvents = first.events[Symbol.asyncIterator]();
+    const firstSystem = (await firstEvents.next()).value as Extract<AgentEvent, { type: 'system' }>;
+    await waitForMethod(fake.recordPath, 'turn/start');
+    const firstRecord = await readRecord(fake.recordPath);
+
+    await writeFile(join(fake.dir, 'test-auth.json'), JSON.stringify({ account: 'second' }));
+    const second = adapter.run({ runId: 'active-2', prompt: 'new work', cwd });
+    const secondEvents = second.events[Symbol.asyncIterator]();
+    await secondEvents.next();
+    await waitForMethod(fake.recordPath, 'turn/start');
+    expect((await readRecord(fake.recordPath)).auth).toEqual({ account: 'second' });
+
+    expect(await adapter.appServerEndpoint(undefined, firstSystem.threadId)).toBe(first.remoteSession?.().endpoint);
+    await adapter.appServerRequest(undefined, 'thread/goal/get', { threadId: firstSystem.threadId });
+    expect((await readRecord(fake.recordPath)).pid).toBe(firstRecord.pid);
+    await first.steer?.('continue the original work');
+    expect((await readRecord(fake.recordPath)).auth).toEqual({ account: 'first' });
+    await first.stop();
+    expect(await collectIterator(firstEvents)).toContainEqual(expect.objectContaining({ type: 'done', terminationReason: 'interrupted' }));
+    await expectProcessDead(firstRecord.pid);
+    await second.stop();
+    expect(await collectIterator(secondEvents)).toContainEqual(expect.objectContaining({ type: 'done', terminationReason: 'interrupted' }));
+
+    // An idle retired thread can resume after its old writer has exited.
+    const resumed = adapter.run({ runId: 'resume-old', prompt: 'resume', cwd, threadId: firstSystem.threadId });
+    const resumedEvents = resumed.events[Symbol.asyncIterator]();
+    expect((await resumedEvents.next()).value).toMatchObject({ threadId: firstSystem.threadId });
+    expect((await readRecord(fake.recordPath)).auth).toEqual({ account: 'second' });
+    await waitForMethod(fake.recordPath, 'turn/start');
+    await resumed.stop();
+    await collectIterator(resumedEvents);
+  });
+
+  it('uses a fresh login for slash-command thread creation and forks', async () => {
+    const fake = await createFakeCodex({ uniqueThreadIds: true });
+    cleanup.push(fake.dir);
+    const adapter = track(new CodexAdapter({ binary: fake.path, profileStateDir: fake.dir }), adapters);
+    await writeFile(join(fake.dir, 'test-auth.json'), JSON.stringify({ account: 'first' }));
+    const first = await adapter.appServerRequest(undefined, 'thread/start', { cwd: fake.dir }) as { thread: { id: string } };
+    const firstPid = (await readRecord(fake.recordPath)).pid;
+    await writeFile(join(fake.dir, 'test-auth.json'), JSON.stringify({ account: 'second' }));
+    const forked = await adapter.appServerRequest(undefined, 'thread/fork', { threadId: first.thread.id }) as { thread: { id: string } };
+    const forkRecord = await readRecord(fake.recordPath);
+    expect(forkRecord.pid).not.toBe(firstPid);
+    expect(forkRecord.auth).toEqual({ account: 'second' });
+    await adapter.appServerRequest(undefined, 'thread/resume', { threadId: forked.thread.id });
+    expect((await readRecord(fake.recordPath)).pid).toBe(forkRecord.pid);
+    await rm(join(fake.dir, 'test-auth.json'));
+    await adapter.appServerRequest(undefined, 'thread/start', { cwd: fake.dir });
+    expect((await readRecord(fake.recordPath)).auth).toBeNull();
+    await expectProcessDead(firstPid);
+  });
+
+  it('preserves other chats and active goals between turns, then releases replaced bindings', async () => {
+    const fake = await createFakeCodex({ uniqueThreadIds: true });
+    cleanup.push(fake.dir);
+    const adapter = track(new CodexAdapter({ binary: fake.path, profileStateDir: fake.dir }), adapters);
+    const first = adapter.run({ runId: 'bound-1', prompt: 'hello', cwd: fake.dir });
+    await collect(first.events);
+    const firstThread = first.remoteSession!().threadId!;
+    const firstPid = (await readRecord(fake.recordPath)).pid;
+    const binding = { scopeId: 'chat-1', chatId: 'chat-1', operatorOpenId: 'user', cwd: fake.dir, sandbox: 'read-only' as const };
+    adapter.bindRemoteThread({ ...binding, threadId: firstThread });
+    await adapter.appServerRequest(undefined, 'thread/goal/set', { threadId: firstThread, objective: 'keep working', status: 'active' });
+
+    const second = adapter.run({ runId: 'bound-2', prompt: 'new conversation', cwd: fake.dir });
+    await collect(second.events);
+    expect(await adapter.appServerEndpoint(undefined, firstThread)).toBe(first.remoteSession!().endpoint);
+    // Moving this chat to its new thread must still preserve an active goal.
+    adapter.bindRemoteThread({ ...binding, threadId: second.remoteSession!().threadId! });
+    await adapter.appServerRequest(undefined, 'thread/goal/set', { threadId: firstThread, objective: 'keep working', status: 'active' });
+    expect((await readRecord(fake.recordPath)).pid).toBe(firstPid);
+    await adapter.appServerRequest(undefined, 'thread/goal/set', { threadId: firstThread, objective: 'keep working', status: 'complete' });
+    await expectProcessDead(firstPid);
+  });
 });
 
 function track(adapter: CodexAdapter, adapters: CodexAdapter[]): CodexAdapter {
@@ -311,7 +423,7 @@ async function collectIterator(iterator: AsyncIterator<AgentEvent>): Promise<Age
 }
 
 async function createFakeCodex(
-  options: { keepTurnOpen?: boolean; ignoreInterrupt?: boolean } = {},
+  options: { keepTurnOpen?: boolean; ignoreInterrupt?: boolean; uniqueThreadIds?: boolean } = {},
 ): Promise<FakeBinary> {
   const dir = await mkdtemp(join(tmpdir(), 'codex-app-server-test-'));
   const path = join(dir, 'fake-codex.mjs');
@@ -319,7 +431,7 @@ async function createFakeCodex(
   const wsEntry = createRequire(import.meta.url).resolve('ws');
   await writeFile(
     path,
-    `#!${process.execPath}\n${fakeServerSource({ recordPath, wsEntry, ...options })}`,
+    `#!${process.execPath}\n${fakeServerSource({ recordPath, authPath: join(dir, 'test-auth.json'), wsEntry, ...options })}`,
     'utf8',
   );
   await chmod(path, 0o755);
@@ -328,22 +440,31 @@ async function createFakeCodex(
 
 function fakeServerSource(input: {
   recordPath: string;
+  authPath: string;
   wsEntry: string;
   keepTurnOpen?: boolean;
   ignoreInterrupt?: boolean;
+  uniqueThreadIds?: boolean;
 }): string {
   return `
-import { writeFileSync } from 'node:fs';
+import { readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import ws from ${JSON.stringify(input.wsEntry)};
 const { WebSocketServer } = ws;
 
 const argv = process.argv.slice(2);
+if (argv.includes('--version')) { console.log('codex-cli 0.153.4'); process.exit(0); }
 const endpoint = argv[argv.indexOf('--listen') + 1];
 const listenUrl = new URL(endpoint);
 const recordPath = ${JSON.stringify(input.recordPath)};
 const messages = [];
-const record = () => writeFileSync(recordPath, JSON.stringify({
+let auth = null;
+try { auth = JSON.parse(readFileSync(${JSON.stringify(input.authPath)}, 'utf8')); } catch {}
+const newThreadId = ${input.uniqueThreadIds ? "'thread-' + process.pid" : "'thread-new'"};
+const record = () => {
+writeFileSync(recordPath + '.' + process.pid, JSON.stringify({
+  pid: process.pid,
+  auth,
   argv,
   messages,
   env: {
@@ -352,6 +473,8 @@ const record = () => writeFileSync(recordPath, JSON.stringify({
     LARK_CHANNEL_PROFILE: process.env.LARK_CHANNEL_PROFILE,
   },
 }));
+renameSync(recordPath + '.' + process.pid, recordPath);
+};
 record();
 
 const server = createServer();
@@ -365,7 +488,7 @@ wss.on('connection', (socket) => {
     const notify = (method, params) => socket.send(JSON.stringify({ method, params }));
     if (message.method === 'initialize') return respond({ userAgent: 'fake', platformFamily: 'unix', platformOs: 'linux' });
     if (message.method === 'initialized') return;
-    if (message.method === 'thread/start') return respond({ thread: { id: 'thread-new' }, cwd: message.params.cwd, model: 'fake-model' });
+    if (message.method === 'thread/start' || message.method === 'thread/fork') return respond({ thread: { id: newThreadId }, cwd: message.params.cwd, model: 'fake-model' });
     if (message.method === 'thread/resume') return respond({ thread: { id: message.params.threadId }, cwd: message.params.cwd, model: 'fake-model' });
     if (message.method === 'thread/goal/get') return respond({ goal: null });
     if (message.method === 'thread/goal/set') return respond({ goal: {
@@ -422,15 +545,31 @@ process.on('SIGINT', shutdown);
 }
 
 async function readRecord(path: string): Promise<{
+  pid: number;
+  auth: { account: string } | null;
   argv: string[];
   messages: Array<{ method: string; params?: Record<string, unknown> }>;
   env: { CODEX_HOME?: string; LARK_CHANNEL?: string; LARK_CHANNEL_PROFILE?: string };
 }> {
   return JSON.parse(await readFile(path, 'utf8')) as {
+    pid: number;
+    auth: { account: string } | null;
     argv: string[];
     messages: Array<{ method: string; params?: Record<string, unknown> }>;
     env: { CODEX_HOME?: string; LARK_CHANNEL?: string; LARK_CHANNEL_PROFILE?: string };
   };
+}
+
+async function expectProcessDead(pid: number): Promise<void> {
+  const deadline = Date.now() + 3_000;
+  while (Date.now() < deadline) {
+    try { process.kill(pid, 0); } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ESRCH') return;
+      throw error;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  throw new Error(`retired Codex process ${pid} is still alive`);
 }
 
 async function waitForMethod(path: string, method: string): Promise<void> {

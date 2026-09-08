@@ -1398,7 +1398,7 @@ async function codexRemoteContext(ctx: CommandContext): Promise<{
   const identity = cwd ? await currentSessionCatalogIdentity(ctx, cwd) : undefined;
   const threadId = active?.threadId ?? (identity ? ctx.sessionCatalog?.activeFor(identity)?.threadId : undefined);
   const endpoint = active?.endpoint
-    || await ctx.agent.appServerEndpoint?.(profile)
+    || await ctx.agent.appServerEndpoint?.(profile, threadId)
     || '';
   if (!endpoint) throw new Error('当前 Codex adapter 不支持远程附着');
   if (threadId && cwd) bindCodexThread(ctx, threadId, cwd);

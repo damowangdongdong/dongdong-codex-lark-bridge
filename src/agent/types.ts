@@ -157,7 +157,7 @@ export interface AgentAdapter {
   close?(): Promise<void>;
   /** Low-level Codex app-server access for bridge slash commands. */
   appServerRequest?(profile: string | undefined, method: string, params?: unknown): Promise<unknown>;
-  appServerEndpoint?(profile?: string): Promise<string>;
+  appServerEndpoint?(profile?: string, threadId?: string): Promise<string>;
   /** Release the Codex process that currently owns a thread writer lock. */
   takeoverThreadWriter?(threadId: string): Promise<{ terminatedPids: number[] }>;
   bindRemoteThread?(binding: AgentRemoteThreadBinding): void;

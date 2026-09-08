@@ -45,6 +45,10 @@ export class CodexAdapter implements AgentAdapter {
 
   private readonly options: CodexAdapterOptions;
   private readonly clients = new Map<string, CodexAppServerClient>();
+  private readonly allClients = new Set<CodexAppServerClient>();
+  private readonly threadClients = new Map<string, CodexAppServerClient>();
+  private readonly clientUsers = new Map<CodexAppServerClient, number>();
+  private readonly closingClients = new Set<Promise<void>>();
   private readonly remoteBindings = new Map<string, AgentRemoteThreadBinding>();
   private readonly bridgeActiveThreads = new Set<string>();
   private readonly threadGoals = new Map<string, AgentGoal>();
@@ -79,7 +83,7 @@ export class CodexAdapter implements AgentAdapter {
       );
     }
     try {
-      if (options) await this.clientFor(options.profile).start();
+      if (options?.threadId) await this.clientFor(options.profile, options.threadId).start();
     } catch (err) {
       throw new SpawnFailed('codex app-server failed to start', err, 'agent-prepare-failed');
     }
@@ -89,9 +93,18 @@ export class CodexAdapter implements AgentAdapter {
     if (!options.cwd) throw new Error('cwd is required for CodexAdapter.run');
     const profile = options.profile ?? this.options.profile;
     const codexHome = this.codexHome();
-    const client = this.clientFor(profile);
+    const client = options.threadId
+      ? this.clientFor(profile, options.threadId)
+      : this.createClient(profile);
+    this.retainClient(client);
+    this.closeRetiredClients();
     return new CodexAppServerRun({
       client,
+      rememberThread: (threadId) => {
+        this.threadClients.set(remoteThreadKey(profile, threadId), client);
+      },
+      onFinish: () => this.releaseClient(client),
+      waitForRetiredClients: () => Promise.all(this.closingClients).then(() => undefined),
       options: {
         ...options,
         cwd: options.cwd,
@@ -118,10 +131,12 @@ export class CodexAdapter implements AgentAdapter {
   }
 
   async close(): Promise<void> {
-    const clients = [...this.clients.values()];
+    const clients = [...this.allClients];
     this.clients.clear();
+    this.allClients.clear();
+    this.threadClients.clear();
     this.threadGoals.clear();
-    await Promise.allSettled(clients.map((client) => client.close()));
+    await Promise.allSettled([...clients.map((client) => client.close()), ...this.closingClients]);
   }
 
   async appServerRequest(
@@ -130,8 +145,27 @@ export class CodexAdapter implements AgentAdapter {
     params?: unknown,
   ): Promise<unknown> {
     const selectedProfile = profile ?? this.options.profile;
-    const result = await this.clientFor(selectedProfile).request(method, params);
     const threadId = stringValue(recordValue(params)?.threadId);
+    const client = method === 'thread/start' || method === 'thread/fork'
+      ? this.createClient(selectedProfile)
+      : this.clientFor(selectedProfile, threadId);
+    this.retainClient(client);
+    this.closeRetiredClients();
+    let result: unknown;
+    try {
+      if (method === 'thread/resume' || method === 'thread/fork') {
+        await Promise.all(this.closingClients);
+      }
+      result = await client.request(method, params);
+      if (method === 'thread/start' || method === 'thread/resume' || method === 'thread/fork') {
+        const loadedThreadId = stringValue(recordValue(recordValue(result)?.thread)?.id);
+        if (loadedThreadId) {
+          this.threadClients.set(remoteThreadKey(selectedProfile, loadedThreadId), client);
+        }
+      }
+    } finally {
+      this.releaseClient(client);
+    }
     if (threadId && (method === 'thread/goal/set' || method === 'thread/goal/get')) {
       const goal = parseCodexGoal(recordValue(result)?.goal);
       if (goal) this.rememberGoal(selectedProfile, threadId, goal);
@@ -142,8 +176,8 @@ export class CodexAdapter implements AgentAdapter {
     return result;
   }
 
-  async appServerEndpoint(profile?: string): Promise<string> {
-    const client = this.clientFor(profile);
+  async appServerEndpoint(profile?: string, threadId?: string): Promise<string> {
+    const client = this.clientFor(profile, threadId);
     await client.start();
     if (!client.endpoint) throw new Error('Codex app-server returned no endpoint');
     return client.endpoint;
@@ -155,9 +189,9 @@ export class CodexAdapter implements AgentAdapter {
       throw new Error('thread writer 由当前 bridge 进程持有，无法安全接管');
     }
 
-    const owned = new Map<number, { key: string; client: CodexAppServerClient }>();
-    for (const [key, client] of this.clients.entries()) {
-      if (client.processId) owned.set(client.processId, { key, client });
+    const owned = new Map<number, CodexAppServerClient>();
+    for (const client of this.allClients) {
+      if (client.processId) owned.set(client.processId, client);
     }
 
     const externalPids = pids.filter((pid) => !owned.has(pid));
@@ -171,8 +205,7 @@ export class CodexAdapter implements AgentAdapter {
     for (const pid of pids) {
       const ownedClient = owned.get(pid);
       if (ownedClient) {
-        await ownedClient.client.close();
-        this.clients.delete(ownedClient.key);
+        await this.closeClient(ownedClient);
       } else {
         await terminateProcess(pid);
       }
@@ -182,7 +215,11 @@ export class CodexAdapter implements AgentAdapter {
   }
 
   bindRemoteThread(binding: AgentRemoteThreadBinding): void {
+    for (const [key, existing] of this.remoteBindings) {
+      if (existing.scopeId === binding.scopeId) this.remoteBindings.delete(key);
+    }
     this.remoteBindings.set(remoteThreadKey(binding.profile, binding.threadId), { ...binding });
+    this.closeRetiredClients();
   }
 
   onExternalRun(listener: (run: AgentExternalRun) => void): () => void {
@@ -190,11 +227,22 @@ export class CodexAdapter implements AgentAdapter {
     return () => this.externalRunListeners.delete(listener);
   }
 
-  private clientFor(profile: string | undefined): CodexAppServerClient {
+  private clientFor(profile: string | undefined, threadId?: string): CodexAppServerClient {
     const selected = profile ?? this.options.profile;
+    if (threadId) {
+      const owner = this.threadClients.get(remoteThreadKey(selected, threadId));
+      if (owner) return owner;
+    }
     const key = selected ?? '';
     const existing = this.clients.get(key);
     if (existing) return existing;
+    return this.createClient(selected);
+  }
+
+  private createClient(profile: string | undefined): CodexAppServerClient {
+    const selected = profile ?? this.options.profile;
+    // A new process reads Codex's current credential store. account/read with
+    // refreshToken only refreshes the cached account; it does not reload login.
     const client = new CodexAppServerClient({
       binary: this.options.binary,
       profileStateDir: join(
@@ -209,8 +257,52 @@ export class CodexAdapter implements AgentAdapter {
     client.onNotification((notification) => {
       this.handleAdapterNotification(selected, client, notification);
     });
-    this.clients.set(key, client);
+    this.clients.set(selected ?? '', client);
+    this.allClients.add(client);
     return client;
+  }
+
+  private retainClient(client: CodexAppServerClient): void {
+    this.clientUsers.set(client, (this.clientUsers.get(client) ?? 0) + 1);
+  }
+
+  private releaseClient(client: CodexAppServerClient): void {
+    const users = (this.clientUsers.get(client) ?? 1) - 1;
+    if (users > 0) this.clientUsers.set(client, users);
+    else this.clientUsers.delete(client);
+    this.closeRetiredClients();
+  }
+
+  private closeRetiredClients(): void {
+    const current = new Set(this.clients.values());
+    for (const [key, client] of this.threadClients) {
+      // Other chats keep their attached terminal and background work, even
+      // between turns. Replacing a scope's binding releases its old client.
+      if (this.remoteBindings.has(key) || this.threadGoals.get(key)?.status === 'active') {
+        current.add(client);
+      }
+    }
+    for (const client of this.allClients) {
+      if (!current.has(client) && !this.clientUsers.has(client)) {
+        void this.closeClient(client);
+      }
+    }
+  }
+
+  private closeClient(client: CodexAppServerClient): Promise<void> {
+    this.allClients.delete(client);
+    for (const [key, value] of this.clients) {
+      if (value === client) this.clients.delete(key);
+    }
+    for (const [key, value] of this.threadClients) {
+      if (value === client) this.threadClients.delete(key);
+    }
+    const closing = client.close().catch((error) => {
+      log.warn('codex-app-server', 'cleanup-failed', { message: String(error) });
+    });
+    this.closingClients.add(closing);
+    void closing.then(() => this.closingClients.delete(closing));
+    return closing;
   }
 
   private codexHome(): string {
@@ -246,12 +338,16 @@ export class CodexAdapter implements AgentAdapter {
     if (!binding) return;
     const externalKey = `${threadKey}\u001f${turnId}`;
     if (this.externalRuns.has(externalKey)) return;
+    this.retainClient(client);
     const run = new CodexExternalRun({
       client,
       binding,
       turnId,
       initialGoal: this.threadGoals.get(threadKey),
-      onFinish: () => this.externalRuns.delete(externalKey),
+      onFinish: () => {
+        this.externalRuns.delete(externalKey);
+        this.releaseClient(client);
+      },
     });
     this.externalRuns.set(externalKey, run);
     for (const listener of this.externalRunListeners) listener({ binding: { ...binding }, run });
@@ -271,11 +367,15 @@ export class CodexAdapter implements AgentAdapter {
     const key = remoteThreadKey(profile, threadId);
     if (goal) this.threadGoals.set(key, goal);
     else this.threadGoals.delete(key);
+    this.closeRetiredClients();
   }
 }
 
 interface CodexAppServerRunInput {
   client: CodexAppServerClient;
+  rememberThread(threadId: string): void;
+  onFinish(): void;
+  waitForRetiredClients(): Promise<void>;
   options: AgentRunOptions & { cwd: string; sandbox: SandboxMode };
   loadProfileConfig?: () => Promise<Record<string, unknown>>;
   initialGoal?: AgentGoal;
@@ -288,6 +388,9 @@ class CodexAppServerRun implements AgentRun {
   readonly events: AsyncIterable<AgentEvent>;
 
   private readonly client: CodexAppServerClient;
+  private readonly rememberThread: CodexAppServerRunInput['rememberThread'];
+  private readonly onFinish: CodexAppServerRunInput['onFinish'];
+  private readonly waitForRetiredClients: CodexAppServerRunInput['waitForRetiredClients'];
   private readonly options: CodexAppServerRunInput['options'];
   private readonly loadProfileConfig: CodexAppServerRunInput['loadProfileConfig'];
   private readonly initialGoal: AgentGoal | undefined;
@@ -307,6 +410,9 @@ class CodexAppServerRun implements AgentRun {
 
   constructor(input: CodexAppServerRunInput) {
     this.client = input.client;
+    this.rememberThread = input.rememberThread;
+    this.onFinish = input.onFinish;
+    this.waitForRetiredClients = input.waitForRetiredClients;
     this.options = input.options;
     this.loadProfileConfig = input.loadProfileConfig;
     this.initialGoal = input.initialGoal;
@@ -375,6 +481,7 @@ class CodexAppServerRun implements AgentRun {
   private async start(): Promise<void> {
     try {
       await this.client.start();
+      if (this.options.threadId) await this.waitForRetiredClients();
       const threadResponse = this.options.threadId
         ? await this.client.request('thread/resume', await this.threadParams(this.options.threadId))
         : await this.client.request('thread/start', await this.threadParams());
@@ -383,6 +490,7 @@ class CodexAppServerRun implements AgentRun {
       const threadId = stringValue(thread?.id);
       if (!threadId) throw new Error('Codex app-server returned no thread id');
       this.threadId = threadId;
+      this.rememberThread(threadId);
       this.translator = new CodexAppServerEventTranslator(threadId);
       this.queue.push({
         type: 'system',
@@ -490,6 +598,7 @@ class CodexAppServerRun implements AgentRun {
       this.bridgeThreadMarked = false;
     }
     this.resolveExited();
+    this.onFinish();
   }
 }
 
