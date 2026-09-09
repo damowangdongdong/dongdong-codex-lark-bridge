@@ -318,6 +318,42 @@ describe('Codex resumed-history cards', () => {
     }
   });
 
+  it('keeps historical tables and image syntax literal inside the card', () => {
+    const riskyMarkdown = [
+      ...Array.from({ length: 8 }, (_, index) => [
+        `| table ${index} | value |`,
+        '|---|---|',
+        '| row | 1 |',
+      ].join('\n')),
+      '![old image](img_stale_key)',
+      '```json',
+      '{"nested":"fence"}',
+      '```',
+    ].join('\n\n');
+    const [card] = renderCodexHistoryCards({
+      thread: {
+        id: 'thread-risky-markdown',
+        turns: [{
+          status: 'completed',
+          items: [
+            { type: 'userMessage', content: [{ type: 'input_text', text: 'show history' }] },
+            { type: 'agentMessage', phase: 'final_answer', text: riskyMarkdown },
+          ],
+        }],
+      },
+    }, '/repo');
+    const outer = (card as {
+      body: { elements: Array<{ elements?: Array<{ content?: string }> }> };
+    }).body.elements[2];
+    const content = outer?.elements?.[0]?.content ?? '';
+
+    expect(content.startsWith('```text\n')).toBe(true);
+    expect(content.endsWith('\n```')).toBe(true);
+    expect(content).toContain('| table 7 | value |');
+    expect(content).toContain('![old image](img_stale_key)');
+    expect(content).not.toContain('\n```json\n');
+  });
+
   it('keeps the last assistant update when an interrupted turn has no final answer', () => {
     const rendered = JSON.stringify(renderCodexHistoryCards({
       thread: {

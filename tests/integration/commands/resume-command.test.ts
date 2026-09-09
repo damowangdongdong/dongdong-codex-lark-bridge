@@ -515,6 +515,39 @@ describe('agent-aware resume commands', () => {
     expect(lastMarkdown(h.channel)).toContain('读取历史记录失败');
   });
 
+  it('reports history card send failures separately from history read failures', async () => {
+    const h = await createHarness('codex');
+    h.codexHistory.push(codexThread('thread-card-failure', 'card history', 1_700_000_100_000));
+    h.agent.setAppServerResponse('thread/read', {
+      thread: {
+        id: 'thread-card-failure',
+        turns: [{
+          status: 'completed',
+          items: [
+            { type: 'userMessage', content: [{ type: 'input_text', text: 'question' }] },
+            { type: 'agentMessage', phase: 'final_answer', text: 'answer' },
+          ],
+        }],
+      },
+    });
+    await expect(h.run('/resume')).resolves.toBe(true);
+    const [nonce] = resumeArgsFromCard(lastContent(h.channel));
+    await expect(h.run(`/resume use ${nonce}`)).resolves.toBe(true);
+    const historyNonce = historyNonceFromCard(lastContent(h.channel));
+    const originalSend = h.channel.send.bind(h.channel);
+    h.channel.send = async (chatId, content, options) => {
+      if (JSON.stringify(content).includes('Codex 历史')) {
+        throw new Error('card table number over limit');
+      }
+      return originalSend(chatId, content, options);
+    };
+
+    await h.dispatchHistoryArg('send', historyNonce);
+
+    expect(lastMarkdown(h.channel)).toContain('历史记录卡片发送失败');
+    expect(lastMarkdown(h.channel)).not.toContain('读取历史记录失败');
+  });
+
   it('keeps Codex resume history details out of group chats like Claude', async () => {
     const h = await createHarness('codex');
     h.codexHistory.push(codexThread('thread-alpha-secret', 'alpha prompt', 1_700_000_100_000));

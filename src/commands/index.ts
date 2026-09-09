@@ -2543,20 +2543,13 @@ async function sendCodexResumeHistory(
     ctx.scope,
     ctx.controls.profileConfig.codex?.profile,
   );
+  let result: unknown;
   try {
-    const result = await ctx.agent.appServerRequest(
+    result = await ctx.agent.appServerRequest(
       profile,
       'thread/read',
       { threadId, includeTurns: true },
     );
-    const cards = renderCodexHistoryCards(result, cwd);
-    if (cards.length === 0) {
-      await reply(ctx, '当前会话没有可显示的历史上下文。');
-      return;
-    }
-    for (const card of cards) {
-      await ctx.channel.send(ctx.msg.chatId, { card }, commandReplyOptions(ctx));
-    }
   } catch (err) {
     log.warn('session', 'codex-history-read-failed', {
       scope: ctx.scope,
@@ -2564,6 +2557,34 @@ async function sendCodexResumeHistory(
       message: err instanceof Error ? err.message : String(err),
     });
     await reply(ctx, '会话已恢复，但读取历史记录失败；你仍可继续发送消息。');
+    return;
+  }
+
+  const cards = renderCodexHistoryCards(result, cwd);
+  if (cards.length === 0) {
+    await reply(ctx, '当前会话没有可显示的历史上下文。');
+    return;
+  }
+  let sentPages = 0;
+  try {
+    for (const card of cards) {
+      await ctx.channel.send(ctx.msg.chatId, { card }, commandReplyOptions(ctx));
+      sentPages += 1;
+    }
+  } catch (err) {
+    log.warn('session', 'codex-history-send-failed', {
+      scope: ctx.scope,
+      threadId,
+      sentPages,
+      totalPages: cards.length,
+      message: err instanceof Error ? err.message : String(err),
+    });
+    await reply(
+      ctx,
+      sentPages > 0
+        ? `历史记录已发送 ${sentPages}/${cards.length} 页，但后续卡片发送失败；你仍可继续发送消息。`
+        : '会话已恢复，但历史记录卡片发送失败；你仍可继续发送消息。',
+    );
   }
 }
 

@@ -185,11 +185,15 @@ function sectionChunks(
 }
 
 function historyPageSection(sections: TraceSection[]): TraceSection {
+  const transcript = sections
+    .map((section) => `${section.title}\n${section.body}`)
+    .join('\n\n---\n\n');
   return {
     title: '📚 历史消息（点击查看）',
-    body: sections
-      .map((section) => `**${escapeMd(section.title)}**\n${section.body}`)
-      .join('\n\n---\n\n'),
+    // History can contain arbitrary model Markdown. Keep it literal so Feishu
+    // does not turn old tables or image syntax into card components and reject
+    // the whole card for component-count or stale image-key validation.
+    body: `\`\`\`text\n${escapeFence(transcript)}\n\`\`\``,
   };
 }
 
