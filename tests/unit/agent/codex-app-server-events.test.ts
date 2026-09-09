@@ -260,6 +260,11 @@ describe('Codex app-server event translator', () => {
         notification('item/commandExecution/terminalInteraction', {
           itemId: 'command',
           processId: '7',
+          stdin: '\n',
+        }),
+        notification('item/commandExecution/terminalInteraction', {
+          itemId: 'command',
+          processId: '7',
           stdin: 'yes\n',
         }),
         notification('item/started', {
@@ -371,6 +376,49 @@ describe('Codex app-server event translator', () => {
         },
       }),
     ])).toEqual([{ type: 'user_text', content: '请只读取 package.json' }]);
+  });
+
+  it('omits internal and blank user-message items from the live event stream', () => {
+    const translator = new CodexAppServerEventTranslator('thread-1');
+    translator.setTurnId('turn-1');
+
+    expect(translateAll(translator, [
+      notification('item/started', {
+        item: {
+          id: 'environment',
+          type: 'userMessage',
+          content: [{ type: 'text', text: '<environment_context>\nsecret cwd\n</environment_context>' }],
+        },
+      }),
+      notification('item/completed', {
+        item: {
+          id: 'environment',
+          type: 'userMessage',
+          content: [{ type: 'text', text: '<environment_context>\nsecret cwd\n</environment_context>' }],
+        },
+      }),
+      notification('item/completed', {
+        item: {
+          id: 'internal',
+          type: 'userMessage',
+          content: [{ type: 'text', text: '<codex_internal_context>\nsecret objective\n</codex_internal_context>' }],
+        },
+      }),
+      notification('item/started', {
+        item: {
+          id: 'blank',
+          type: 'userMessage',
+          content: [{ type: 'text', text: ' \n\t' }],
+        },
+      }),
+      notification('item/completed', {
+        item: {
+          id: 'human',
+          type: 'userMessage',
+          content: [{ type: 'text', text: '真实用户输入' }],
+        },
+      }),
+    ])).toEqual([{ type: 'user_text', content: '真实用户输入' }]);
   });
 
   it('uses completed plan and reasoning items when deltas are absent or differ', () => {

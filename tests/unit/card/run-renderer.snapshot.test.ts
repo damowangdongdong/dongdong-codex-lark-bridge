@@ -131,6 +131,14 @@ describe('run card renderer snapshots', () => {
     expect(rendered).toContain('"expanded":false');
   });
 
+  it('does not create a live-card section for blank user input', () => {
+    const rendered = JSON.stringify(renderCard(stateFrom([
+      { type: 'user_text', content: ' \n\t' },
+    ])));
+
+    expect(rendered).not.toContain('输入，点击查看');
+  });
+
   it('renders the full Codex thread ID in a native copyable code block', () => {
     const threadId = '019abcde-0123-4567-89ab-cdef01234567';
     const rendered = JSON.stringify(renderCard(stateFrom([

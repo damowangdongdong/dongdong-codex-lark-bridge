@@ -79,6 +79,7 @@ export function reduce(state: RunState, evt: AgentEvent): RunState {
         },
       };
     case 'user_text':
+      if (!evt.content.trim()) return state;
       return {
         ...state,
         blocks: [...closeStreamingText(state.blocks), { kind: 'user', content: evt.content }],

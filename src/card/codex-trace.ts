@@ -1,5 +1,5 @@
 import type { NoticeEntry, RunState, ToolEntry } from './run-state';
-import { extractBridgeUserInput, redactEmbeddedBridgePrompts } from '../agent/prompt';
+import { redactEmbeddedBridgePrompts, sanitizeCodexUserInput } from '../agent/prompt';
 import { normalizeSessionPreview } from '../session/preview';
 import { deepMaskEmails } from './mask-email';
 import { codexThreadIdMarkdown } from './copyable-code';
@@ -26,7 +26,7 @@ export function renderRunTraceCards(
   }
   for (const block of state.blocks) {
     if (block.kind === 'user') {
-      const input = sanitizeUserInput(block.content);
+      const input = sanitizeCodexUserInput(block.content);
       if (input) sections.push(...sectionChunks('👤 User input', input));
     } else if (block.kind === 'text') {
       sections.push(...sectionChunks('💬 Commentary', block.content));
@@ -145,7 +145,7 @@ function historyItemSections(item: Record<string, unknown>): TraceSection[] {
   const type = stringValue(item.type) ?? 'item';
   switch (type) {
     case 'userMessage': {
-      const input = sanitizeUserInput(contentText(item));
+      const input = sanitizeCodexUserInput(contentText(item));
       return input ? sectionChunks('👤 User', input) : [];
     }
     case 'agentMessage':
@@ -307,16 +307,6 @@ function contentText(item: Record<string, unknown>): string {
     .map((part) => part && typeof part.text === 'string' ? part.text : '')
     .filter(Boolean)
     .join('\n');
-}
-
-function sanitizeUserInput(input: string): string {
-  const extracted = extractBridgeUserInput(input);
-  if (extracted !== undefined) return extracted;
-  return isInternalContextOnly(input) ? '' : redactEmbeddedBridgePrompts(input);
-}
-
-function isInternalContextOnly(input: string): boolean {
-  return /^\s*<(?:bridge_context|bridge_instructions|environment_context|codex_internal_context)\b/.test(input);
 }
 
 function stringify(value: unknown): string {

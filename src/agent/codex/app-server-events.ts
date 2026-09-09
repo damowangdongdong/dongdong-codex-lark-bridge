@@ -1,6 +1,6 @@
 import { CODEX_GOAL_CONTINUATION_CLIENT_ID, parseCodexGoal } from '../goal';
 import type { AgentEvent, AgentPlanStep } from '../types';
-import { extractBridgeUserInput } from '../prompt';
+import { sanitizeCodexUserInput } from '../prompt';
 import type { RpcNotification } from './app-server-client';
 
 interface ItemState {
@@ -57,7 +57,7 @@ export class CodexAppServerEventTranslator {
       }
       case 'item/commandExecution/terminalInteraction': {
         const stdin = stringValue(params.stdin);
-        return this.withRecovery(stdin ? [{ type: 'user_text', content: stdin }] : []);
+        return this.withRecovery(stdin?.trim() ? [{ type: 'user_text', content: stdin }] : []);
       }
       case 'item/fileChange/outputDelta': {
         const id = stringValue(params.itemId);
@@ -416,7 +416,7 @@ function userMessageText(item: Record<string, unknown>): string {
     .map((part) => part && typeof part.text === 'string' ? part.text : '')
     .filter(Boolean)
     .join('\n');
-  return extractBridgeUserInput(content) ?? content;
+  return sanitizeCodexUserInput(content);
 }
 
 function itemThinkingText(item: Record<string, unknown>): string {

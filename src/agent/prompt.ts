@@ -229,6 +229,17 @@ export function extractBridgeUserInput(input: string): string | undefined {
   return undefined;
 }
 
+/** Return the user-authored portion of a Codex userMessage for display. */
+export function sanitizeCodexUserInput(input: string): string {
+  const extracted = extractBridgeUserInput(input);
+  const visible = extracted !== undefined
+    ? extracted
+    : isCodexInternalContextOnly(input)
+      ? ''
+      : redactEmbeddedBridgePrompts(input);
+  return visible.trim() ? visible : '';
+}
+
 /** Remove complete bridge runtime prompts embedded in quoted cards or tool output. */
 export function redactEmbeddedBridgePrompts(input: string): string {
   let cursor = 0;
@@ -261,6 +272,10 @@ export function redactEmbeddedBridgePrompts(input: string): string {
     cursor = blockEnd;
   }
   return result;
+}
+
+function isCodexInternalContextOnly(input: string): boolean {
+  return /^\s*<(?:bridge_context|bridge_instructions|environment_context|codex_internal_context)\b/.test(input);
 }
 
 function isBridgeWrappedInput(input: string): boolean {
